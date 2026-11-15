@@ -1,0 +1,6 @@
+{
+  "name": "AI หวยแม่นยำ & Facebook Auto-Post",
+  "description": "ระบบวิเคราะห์เลขหวยรัฐบาลด้วย AI รวบรวมสถิติย้อนหลังและหลายสำนักดัง พร้อมระบบโพสต์ออโต้บนเฟสบุ๊คล่วงหน้า 5 วันก่อนหวยออก",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

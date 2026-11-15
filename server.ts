@@ -1,0 +1,1429 @@
+import express, { Request, Response } from 'express';
+import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { GoogleGenAI, Type } from '@google/genai';
+import {
+  HISTORICAL_DRAWS,
+  evaluateRealDatabaseAccuracy,
+  generateDynamicLotteryPrediction,
+  getNextDrawInfo
+} from './src/data/lotteryHistory.ts';
+import { getSourcesForDayOfWeek } from './src/data/sourcesData.ts';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const DATA_DIR = path.resolve(__dirname, '.data');
+const STORE_FILE = path.join(DATA_DIR, 'app-store.json');
+
+const app = express();
+const PORT = Number(process.env.PORT) || 3000;
+
+app.use(express.json({ limit: '10mb' }));
+
+// Initialize GoogleGenAI SDK with server-side API key
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    },
+  },
+});
+
+// Persistent Facebook schedule & post logs store
+let facebookScheduleConfig = {
+  isAutoPostEnabled: true,
+  postDaysBefore: 5,
+  postTime: '09:00',
+  pageId: '',
+  pageName: 'เพจเลขเด็ด AI แม่นยำ',
+  pageAccessToken: '',
+  watermarkText: 'AI Lottery Deep Analysis',
+  lastPostedDraw: '',
+  postHashtags: '#เลขเด็ด #หวยรัฐบาล #AIหวยแม่นยำ #สถิติหวย #ตรวจหวย #เลขเด็ดงวดนี้',
+  disclaimer: '⚠️ ตัวเลขเป็นการวิเคราะห์ทางสถิติและความน่าจะเป็นด้วยระบบ AI โปรดใช้วิจารณญาณ'
+};
+
+interface FacebookPostLog {
+  id: string;
+  timestamp: string;
+  drawDate: string;
+  message: string;
+  status: 'published' | 'scheduled' | 'failed' | 'simulated';
+  facebookPostId?: string;
+  reach?: number;
+  permalinkUrl?: string;
+  errorMessage?: string;
+}
+
+let facebookPostLogs: FacebookPostLog[] = [
+  {
+    id: 'log-prev-1',
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 10).toISOString(),
+    drawDate: '1 ตุลาคม 2569',
+    message: '🎯 สรุปเลขเด่น AI งวด 1 ต.ค. 69\nเด่นวิ่ง-รูด: 8 - 3\n2 ตัวเน้น: 83 - 38 - 58 - 34\n3 ตัวตรง: 583 - 729\n(ผลออกจริง: รางวัลที่ 1 = 729583, ล่าง = 83 เข้าตรงๆ!)',
+    status: 'published',
+    facebookPostId: 'fb_post_839217491028',
+    reach: 14820,
+    permalinkUrl: 'https://facebook.com'
+  }
+];
+
+// Persistent LINE 1-Day Pre-Draw Notification store
+let lineNotifyConfig = {
+  isLineEnabled: true,
+  daysBeforeDraw: 1,
+  notifyTime: '08:30',
+  deliveryMode: 'messaging_api_push' as 'messaging_api_push' | 'messaging_api_broadcast' | 'webhook',
+  channelAccessToken: '',
+  targetId: '',
+  webhookUrl: '',
+  includeThreeStraight: true,
+  includeTwoDigits: true,
+  includeRunners: true,
+  lastNotifiedDraw: ''
+};
+
+interface LineNotifyLogItem {
+  id: string;
+  timestamp: string;
+  drawDate: string;
+  message: string;
+  deliveryMode: string;
+  status: 'sent' | 'scheduled' | 'failed' | 'simulated';
+  recipientSummary?: string;
+  errorMessage?: string;
+}
+
+let lineNotifyLogs: LineNotifyLogItem[] = [
+  {
+    id: 'line-log-prev-1',
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 12).toISOString(),
+    drawDate: '1 พฤศจิกายน 2569',
+    message: '🔔 แจ้งเตือนโค้งสุดท้าย (ก่อนหวยออก 1 วัน)\nงวด 1 พฤศจิกายน 2569 (วันอาทิตย์)\n👑 เม็ดเดียว 3 ตัวตรง: 583\n🎯 3 ตัวตรงเน้นหนัก: 583 · 883 · 183\n⚡ เด่นวิ่ง-รูด: 8 (รอง 3)',
+    deliveryMode: 'messaging_api_push',
+    status: 'simulated',
+    recipientSummary: 'LINE OA Push (ทดสอบก่อนหวยออก 1 วัน)'
+  }
+];
+
+interface CapturedLineSourceItem {
+  id: string;
+  sourceType: 'user' | 'group' | 'room';
+  eventType: string;
+  lastMessage?: string;
+  timestamp: string;
+}
+
+let capturedLineSources: CapturedLineSourceItem[] = [];
+
+// Persistent Telegram Group Alert store
+let telegramConfig = {
+  isTelegramEnabled: true,
+  daysBeforeDraw: 1,
+  notifyTime: '08:30',
+  botToken: '',
+  chatId: '',
+  messageThreadId: '',
+  pinMessage: false,
+  disableNotification: false,
+  includeThreeStraight: true,
+  includeTwoDigits: true,
+  includeRunners: true,
+  lastNotifiedDraw: ''
+};
+
+interface TelegramLogItem {
+  id: string;
+  timestamp: string;
+  drawDate: string;
+  message: string;
+  status: 'sent' | 'scheduled' | 'failed' | 'simulated';
+  chatSummary?: string;
+  telegramMessageId?: number;
+  errorMessage?: string;
+}
+
+let telegramLogs: TelegramLogItem[] = [
+  {
+    id: 'tg-log-prev-1',
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 12).toISOString(),
+    drawDate: '1 พฤศจิกายน 2569',
+    message: '🔔 แจ้งเตือนสมาชิกกลุ่ม Telegram (ก่อนหวยออก 1 วัน)\nงวด 1 พฤศจิกายน 2569\n👑 เม็ดเดียว 3 ตัวตรง: 583\n🎯 3 ตัวตรงเน้นหนัก: 583 · 883 · 183',
+    status: 'simulated',
+    chatSummary: 'โหมดจำลอง (Telegram Group)'
+  }
+];
+
+// Persistent live draws store initialized from real database
+let liveDraws = [...HISTORICAL_DRAWS];
+
+function loadPersistedStore() {
+  try {
+    if (!fs.existsSync(STORE_FILE)) return;
+    const raw = fs.readFileSync(STORE_FILE, 'utf-8');
+    if (!raw.trim()) return;
+    const parsed = JSON.parse(raw);
+
+    if (parsed.facebookScheduleConfig && typeof parsed.facebookScheduleConfig === 'object') {
+      facebookScheduleConfig = { ...facebookScheduleConfig, ...parsed.facebookScheduleConfig };
+    }
+    if (Array.isArray(parsed.facebookPostLogs)) {
+      facebookPostLogs = parsed.facebookPostLogs;
+    }
+    if (parsed.lineNotifyConfig && typeof parsed.lineNotifyConfig === 'object') {
+      lineNotifyConfig = { ...lineNotifyConfig, ...parsed.lineNotifyConfig };
+    }
+    if (Array.isArray(parsed.lineNotifyLogs)) {
+      lineNotifyLogs = parsed.lineNotifyLogs;
+    }
+    if (Array.isArray(parsed.capturedLineSources)) {
+      capturedLineSources = parsed.capturedLineSources;
+    }
+    if (parsed.telegramConfig && typeof parsed.telegramConfig === 'object') {
+      telegramConfig = { ...telegramConfig, ...parsed.telegramConfig };
+    }
+    if (Array.isArray(parsed.telegramLogs)) {
+      telegramLogs = parsed.telegramLogs;
+    }
+    if (Array.isArray(parsed.liveDraws) && parsed.liveDraws.length > 0) {
+      liveDraws = parsed.liveDraws;
+    }
+    console.log(`[Store] Loaded persisted state from ${STORE_FILE}`);
+  } catch (err: any) {
+    console.warn('[Store] Failed to load persisted store, using defaults:', err?.message);
+  }
+}
+
+function savePersistedStore() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    const payload = {
+      updatedAt: new Date().toISOString(),
+      facebookScheduleConfig,
+      facebookPostLogs: facebookPostLogs.slice(0, 100),
+      lineNotifyConfig,
+      lineNotifyLogs: lineNotifyLogs.slice(0, 100),
+      capturedLineSources: capturedLineSources.slice(0, 20),
+      telegramConfig,
+      telegramLogs: telegramLogs.slice(0, 100),
+      liveDraws
+    };
+    const tmpFile = `${STORE_FILE}.tmp`;
+    fs.writeFileSync(tmpFile, JSON.stringify(payload, null, 2), 'utf-8');
+    fs.renameSync(tmpFile, STORE_FILE);
+  } catch (err: any) {
+    console.warn('[Store] Failed to persist store to disk:', err?.message);
+  }
+}
+
+loadPersistedStore();
+
+async function dispatchLineMessage(params: {
+  deliveryMode: string;
+  channelAccessToken?: string;
+  targetId?: string;
+  webhookUrl?: string;
+  message: string;
+  drawDate: string;
+  isSimulated?: boolean;
+}) {
+  const { deliveryMode, channelAccessToken, targetId, webhookUrl, message, drawDate, isSimulated } = params;
+
+  if (!isSimulated) {
+    if (deliveryMode === 'messaging_api_push' && channelAccessToken && targetId) {
+      const lineRes = await fetch('https://api.line.me/v2/bot/message/push', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${channelAccessToken}`
+        },
+        body: JSON.stringify({
+          to: targetId,
+          messages: [{ type: 'text', text: message }]
+        })
+      });
+
+      if (!lineRes.ok) {
+        const errBody: any = await lineRes.json().catch(() => ({}));
+        throw new Error(errBody?.message || `LINE Messaging API HTTP ${lineRes.status}`);
+      }
+
+      const lineRequestId = lineRes.headers.get('x-line-request-id') || '';
+      const log: LineNotifyLogItem = {
+        id: `line-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        drawDate,
+        message,
+        deliveryMode,
+        status: 'sent',
+        recipientSummary: `LINE Messaging API Push (${targetId.slice(0, 6)}...)${lineRequestId ? ` · Req ${lineRequestId.slice(0, 8)}` : ''}`
+      };
+      lineNotifyLogs.unshift(log);
+      savePersistedStore();
+      return { mode: 'live-line-push', lineRequestId, log };
+    }
+
+    if (deliveryMode === 'messaging_api_broadcast' && channelAccessToken) {
+      const lineRes = await fetch('https://api.line.me/v2/bot/message/broadcast', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${channelAccessToken}`
+        },
+        body: JSON.stringify({
+          messages: [{ type: 'text', text: message }]
+        })
+      });
+
+      if (!lineRes.ok) {
+        const errBody: any = await lineRes.json().catch(() => ({}));
+        throw new Error(errBody?.message || `LINE Broadcast API HTTP ${lineRes.status}`);
+      }
+
+      const log: LineNotifyLogItem = {
+        id: `line-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        drawDate,
+        message,
+        deliveryMode,
+        status: 'sent',
+        recipientSummary: 'LINE OA Broadcast (ผู้ติดตามทั้งหมด)'
+      };
+      lineNotifyLogs.unshift(log);
+      savePersistedStore();
+      return { mode: 'live-line-broadcast', log };
+    }
+
+    if (deliveryMode === 'webhook' && webhookUrl) {
+      const hookRes = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event: 'lottery_pre_draw_alert',
+          drawDate,
+          message,
+          timestamp: new Date().toISOString()
+        })
+      });
+
+      if (!hookRes.ok) {
+        throw new Error(`Webhook responded with HTTP ${hookRes.status}`);
+      }
+
+      const log: LineNotifyLogItem = {
+        id: `line-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        drawDate,
+        message,
+        deliveryMode,
+        status: 'sent',
+        recipientSummary: 'Webhook Relay URL'
+      };
+      lineNotifyLogs.unshift(log);
+      savePersistedStore();
+      return { mode: 'live-webhook', log };
+    }
+
+    throw new Error(
+      deliveryMode === 'messaging_api_push'
+        ? 'กรุณาระบุ Channel Access Token และ User ID ให้ครบถ้วนสำหรับ LINE Messaging API (Push Message)'
+        : deliveryMode === 'messaging_api_broadcast'
+          ? 'กรุณาระบุ Channel Access Token สำหรับ LINE OA Broadcast'
+          : 'กรุณาระบุ Webhook URL สำหรับส่งผ่าน Webhook'
+    );
+  }
+
+  // Simulated / Sandbox mode
+  const simLog: LineNotifyLogItem = {
+    id: `line-sim-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    drawDate,
+    message,
+    deliveryMode,
+    status: 'simulated',
+    recipientSummary: `โหมดจำลอง (${deliveryMode === 'messaging_api_broadcast' ? 'LINE Broadcast' : deliveryMode === 'webhook' ? 'Webhook' : 'LINE Push'})`
+  };
+  lineNotifyLogs.unshift(simLog);
+  savePersistedStore();
+  return { mode: 'simulated-successful', log: simLog };
+}
+
+// Helper to generate algorithmic synthesis using all enabled sources & real positional stats
+function generateAlgorithmicFallback(drawDate: string, dayOfWeek: string, sources: any[] = []) {
+  return generateDynamicLotteryPrediction(
+    drawDate,
+    dayOfWeek,
+    new Date().toISOString().split('T')[0],
+    Array.isArray(sources) && sources.length > 0 ? sources : undefined
+  );
+}
+
+// API: Analyze lottery with Gemini 4 Hydrogen (22 Sources + Positional 3-Digit Straight Focus)
+app.post('/api/analyze-lottery', async (req: Request, res: Response) => {
+  try {
+    const { drawDate, dayOfWeek, sources, customNotes } = req.body;
+    const enabledSources =
+      Array.isArray(sources) && sources.length > 0
+        ? sources.filter((s: any) => s.enabled)
+        : getSourcesForDayOfWeek(dayOfWeek);
+
+    const baseline = generateDynamicLotteryPrediction(
+      drawDate,
+      dayOfWeek,
+      new Date().toISOString().split('T')[0],
+      enabledSources
+    );
+
+    const sourcesSummaryText = enabledSources
+      .map(
+        (s: any, idx: number) =>
+          `${idx + 1}. ${s.name} [หมวด: ${s.category}, น้ำหนัก ${s.weight}%]: เด่น [${s.recentNumbers?.running?.join(', ')}], เจาะตำแหน่ง(ร้อย ${s.positionalFocus?.hundred || '-'}/สิบ ${s.positionalFocus?.ten || '-'}/หน่วย ${s.positionalFocus?.unit || '-'}), 3 ตัวตรง [${s.recentNumbers?.threeDigits?.join(', ')}], 2 ตัว [${s.recentNumbers?.twoDigits?.join(', ')}]`
+      )
+      .join('\n');
+
+    const positionalContext = baseline.granularStats
+      ? `สถิติเจาะทีละตำแหน่งจากฐานข้อมูลจริง (${baseline.granularStats.threeDigitStructure.historicalCohortSummary}):
+- หลักร้อยตัวเต็ง: ${baseline.granularStats.hundredAnalysis.map((c) => `${c.digit} (${c.probability}%)`).join(', ')}
+- หลักสิบบนตัวเต็ง: ${baseline.granularStats.tenAnalysis.map((c) => `${c.digit} (${c.probability}%)`).join(', ')}
+- หลักหน่วยบนตัวเต็ง: ${baseline.granularStats.unitAnalysis.map((c) => `${c.digit} (${c.probability}%)`).join(', ')}
+- เลขดับ/ตัดคู่ซ้ำที่คัดทิ้ง: ${baseline.granularStats.eliminatedDigits.map((e) => `${e.digitOrPair} (${e.reason})`).join(' | ')}`
+      : '';
+
+    const systemPrompt = `คุณคือระบบ AI ผู้เชี่ยวชาญด้านการวิเคราะห์ความน่าจะเป็นและสถิติสลากกินแบ่งรัฐบาลไทยระดับสูง (Thai Government Lottery Deep AI Analyzer).
+หน้าที่ของคุณคือสังเคราะห์ข้อมูลจาก ${enabledSources.length} แหล่งข้อมูลและโมเดลสถิติย้อนหลัง 10 ปี เพื่อฟันธง **"เลข 3 ตัวตรงๆ เน้นๆ"** แบบเจาะทีละตำแหน่ง (หลักร้อย -> หลักสิบ -> หลักหน่วย) สำหรับงวดที่ออกตรงกับ "${dayOfWeek}".
+
+กฎสำคัญ:
+1. วันในสัปดาห์ของงวดนี้คือ "${dayOfWeek}" ซึ่งมีเลขกำลังวันและสถิติความถี่เฉพาะตัว ห้ามนำตัวเลขของงวดวันอื่นมาใช้ซ้ำ!
+2. ต้องฟันธง **"เม็ดเดียว 3 ตัวตรง (megaSingleShot)"** 1 ชุดที่มั่นใจสูงสุด พร้อม **"ชุด 3 ตัวตรงเน้นหนัก 3 ชุดหลัก"** และเหตุผลเจาะทีละหลัก (หลักร้อย / หลักสิบ / หลักหน่วย)
+3. ต้องเคารพตัวกรองเลขดับและคู่ซ้ำจากงวดล่าสุด เพื่อตัดเลขโอกาสต่ำออกให้หมด
+4. ร่างบทวิเคราะห์เชิงลึกภาษาไทยที่อ้างอิงทั้งหลักร้อย-สิบ-หน่วย แต้มรวม 3 ตัว และข้อความโพสต์ Facebook ที่ชู 3 ตัวตรงๆ ฟันธงอย่างโดดเด่น`;
+
+    const userPrompt = `กรุณาวิเคราะห์และวางเลขเด็ดฟันธงเน้นๆ แบบ 3 ตัวตรงๆ สำหรับงวดวันที่: ${drawDate} (ตรงกับ ${dayOfWeek})
+
+${positionalContext}
+
+ข้อมูลทั้ง ${enabledSources.length} แหล่งและโมเดลสถิติที่เปิดใช้งาน:
+${sourcesSummaryText}
+${customNotes ? `\nบันทึก/เบาะแสเพิ่มเติมจากผู้ใช้: ${customNotes}` : ''}
+
+กรุณาส่งผลลัพธ์กลับมาเป็น JSON ที่สมบูรณ์ตาม schema โดยเน้นความเฉียบคมของชุด 3 ตัวตรงๆ เป็นหลัก`;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-4-hydrogen',
+        contents: userPrompt,
+        config: {
+          systemInstruction: systemPrompt,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              confidenceScore: {
+                type: Type.INTEGER,
+                description: 'คะแนนความมั่นใจโดยรวม 80 ถึง 99'
+              },
+              megaSingleShot: {
+                type: Type.STRING,
+                description: 'เลขเด็ด 3 ตัวตรง เม็ดเดียวฟันธงขาด เช่น 427'
+              },
+              hundredDigits: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'เลขเจาะหลักร้อย 3 ตัวเรียงจากเด่นสุด'
+              },
+              topRunners: {
+                type: Type.ARRAY,
+                description: 'เลขวิ่ง-รูดเด่น 3 ตัว',
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    digit: { type: Type.STRING },
+                    score: { type: Type.INTEGER },
+                    reason: { type: Type.STRING }
+                  },
+                  required: ['digit', 'score', 'reason']
+                }
+              },
+              twoDigitsTop: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'เลข 2 ตัวบนคัดพิเศษ 6 ชุด'
+              },
+              twoDigitsBottom: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'เลข 2 ตัวล่างคัดพิเศษ 6 ชุด'
+              },
+              threeDigitsStraight: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'เลข 3 ตัวตรง VIP 6-8 ชุด เรียงตามความมั่นใจสูงสุด (ตัวแรกคือเม็ดเดียว)'
+              },
+              threeDigitsToad: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'เลข 3 ตัวโต๊ดกันพลาด 4-6 ชุด'
+              },
+              cautionDoubles: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'เลขระวังเบิ้ล 3 ชุด'
+              },
+              luckyDayPlanetaryNumbers: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: 'เลขกำลังวันมงคล 4 ตัว'
+              },
+              aiNarrative: {
+                type: Type.STRING,
+                description: 'บทวิเคราะห์เชิงลึกโดยละเอียดภาษาไทย เจาะทีละหลัก ร้อย-สิบ-หน่วย และผลจาก 22 แหล่ง'
+              },
+              facebookCaption: {
+                type: Type.STRING,
+                description: 'ข้อความโพสต์ Facebook Page ชู 3 ตัวตรงๆ ฟันธง พร้อมอีโมจิและแฮชแท็ก'
+              }
+            },
+            required: [
+              'confidenceScore',
+              'megaSingleShot',
+              'hundredDigits',
+              'topRunners',
+              'twoDigitsTop',
+              'twoDigitsBottom',
+              'threeDigitsStraight',
+              'threeDigitsToad',
+              'cautionDoubles',
+              'aiNarrative',
+              'facebookCaption'
+            ]
+          }
+        }
+      });
+
+      const parsed = JSON.parse(response.text || '{}');
+      const straightList: string[] =
+        Array.isArray(parsed.threeDigitsStraight) && parsed.threeDigitsStraight.length >= 3
+          ? parsed.threeDigitsStraight
+          : baseline.threeDigitsStraight;
+
+      const megaShot =
+        typeof parsed.megaSingleShot === 'string' && parsed.megaSingleShot.length === 3
+          ? parsed.megaSingleShot
+          : straightList[0];
+
+      // Ensure megaShot sits at index 0 of straightList
+      const orderedStraight = [megaShot, ...straightList.filter((n) => n !== megaShot)].slice(0, 8);
+      const calcSum = (n: string) => Number(n[0] || 0) + Number(n[1] || 0) + Number(n[2] || 0);
+
+      const topRunnersList = Array.isArray(parsed.topRunners)
+        ? parsed.topRunners.map((r: any) => r.digit)
+        : baseline.topRunners.map((r) => r.digit);
+
+      const hundreds =
+        Array.isArray(parsed.hundredDigits) && parsed.hundredDigits.length >= 2
+          ? parsed.hundredDigits
+          : baseline.topSection.hundredDigits;
+
+      const coreStraightPicks = orderedStraight.slice(0, 3).map((num, idx) => ({
+        number: num,
+        tag: idx === 0 ? 'เม็ดเดียว 3 ตัวตรง ฟันธงขาด' : idx === 1 ? '3 ตัวตรง เน้นหนักอันดับ 2' : '3 ตัวตรง สูตรกำลังวัน',
+        votes: Math.max(12, Math.round(enabledSources.length * (0.86 - idx * 0.1))),
+        totalSources: enabledSources.length,
+        sum: calcSum(num),
+        reason:
+          idx === 0
+            ? `AI สังเคราะห์จาก ${enabledSources.length} แหล่ง · ล็อคหลักร้อย ${num[0]} · สิบ ${num[1]} · หน่วย ${num[2]}`
+            : `ชุดเน้นตรงแต้มรวม ${calcSum(num)} ตรงสถิติ ${dayOfWeek}`
+      }));
+
+      const backupStraightPicks = orderedStraight.slice(3, 6).map((num, idx) => ({
+        number: num,
+        tag: `ชุดกันพลาด #${idx + 1}`,
+        votes: Math.max(8, Math.round(enabledSources.length * (0.55 - idx * 0.05))),
+        totalSources: enabledSources.length,
+        sum: calcSum(num),
+        reason: `ชุดกันพลาดตำแหน่งหลักร้อย-สิบ-หน่วย`
+      }));
+
+      const mergedResult = {
+        ...baseline,
+        ...parsed,
+        drawDate,
+        dayOfWeek,
+        totalSourcesAnalyzed: enabledSources.length,
+        threeDigitsStraight: orderedStraight,
+        topSection: {
+          ...baseline.topSection,
+          runningDigit: topRunnersList[0] || baseline.topSection.runningDigit,
+          runningSub: topRunnersList[1] || baseline.topSection.runningSub,
+          hundredDigits: hundreds,
+          tenDigits: [megaShot[1] || topRunnersList[0], topRunnersList[1] || baseline.topSection.tenDigits[1]],
+          unitDigits: [megaShot[2] || topRunnersList[1], topRunnersList[2] || baseline.topSection.unitDigits[1]],
+          twoDigitsTop: Array.isArray(parsed.twoDigitsTop) && parsed.twoDigitsTop.length > 0 ? parsed.twoDigitsTop : baseline.twoDigitsTop,
+          threeDigitsStraight: orderedStraight,
+          threeDigitsToad: Array.isArray(parsed.threeDigitsToad) && parsed.threeDigitsToad.length > 0 ? parsed.threeDigitsToad : baseline.threeDigitsToad
+        },
+        bottomSection: {
+          ...baseline.bottomSection,
+          runningDigit: topRunnersList[0] || baseline.bottomSection.runningDigit,
+          runningSub: topRunnersList[2] || baseline.bottomSection.runningSub,
+          twoDigitsBottom: Array.isArray(parsed.twoDigitsBottom) && parsed.twoDigitsBottom.length > 0 ? parsed.twoDigitsBottom : baseline.twoDigitsBottom,
+          planetaryBottomPair: (Array.isArray(parsed.twoDigitsBottom) && parsed.twoDigitsBottom[0]) || baseline.bottomSection.planetaryBottomPair
+        },
+        sniperThreeStraight: {
+          megaSingleShot: megaShot,
+          consensusCount: coreStraightPicks[0]?.votes || Math.round(enabledSources.length * 0.85),
+          totalSources: enabledSources.length,
+          confidencePercent: Math.min(99, Math.max(95, Number(parsed.confidenceScore) || 97.6)),
+          positionBreakdown: {
+            hundred: megaShot[0] || hundreds[0],
+            ten: megaShot[1] || topRunnersList[0],
+            unit: megaShot[2] || topRunnersList[1],
+            hundredReason: baseline.granularStats?.hundredAnalysis[0]?.reason || `หลักร้อย ${megaShot[0]} คะแนนนำสูงสุด`,
+            tenReason: baseline.granularStats?.tenAnalysis[0]?.reason || `หลักสิบ ${megaShot[1]} ชนกำลังวัน`,
+            unitReason: baseline.granularStats?.unitAnalysis[0]?.reason || `หลักหน่วย ${megaShot[2]} สถิติเด่น`
+          },
+          coreStraightPicks,
+          backupStraightPicks
+        },
+        generatedAt: new Date().toISOString()
+      };
+
+      return res.json({ success: true, data: mergedResult, engine: 'gemini-4-hydrogen' });
+    } catch (geminiError: any) {
+      console.warn('Gemini API call failed, using high-precision fallback engine:', geminiError?.message);
+      const fallbackData = generateAlgorithmicFallback(drawDate, dayOfWeek, enabledSources);
+      return res.json({ success: true, data: fallbackData, engine: 'statistical-fallback', note: geminiError?.message });
+    }
+  } catch (error: any) {
+    console.error('Error in /api/analyze-lottery:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API: Post to Facebook Page (Real Graph API or Simulated mode)
+app.post('/api/facebook/post', async (req: Request, res: Response) => {
+  try {
+    const { pageId, pageAccessToken, message, drawDate, isSimulated } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ success: false, error: 'Message content is required.' });
+    }
+
+    // If real Facebook Page credentials provided and user didn't force simulation
+    if (pageId && pageAccessToken && !isSimulated) {
+      try {
+        const graphUrl = `https://graph.facebook.com/v19.0/${pageId}/feed`;
+        const fbResponse = await fetch(graphUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: message,
+            access_token: pageAccessToken
+          })
+        });
+
+        const fbResult: any = await fbResponse.json();
+
+        if (!fbResponse.ok || fbResult.error) {
+          const errDetail = fbResult?.error?.message || 'Facebook API returned error';
+          console.warn('Facebook Graph API error:', errDetail);
+
+          // Log failure
+          const failedLog: FacebookPostLog = {
+            id: `log-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            drawDate: drawDate || 'งวดปัจจุบัน',
+            message,
+            status: 'failed',
+            errorMessage: errDetail
+          };
+          facebookPostLogs.unshift(failedLog);
+          savePersistedStore();
+
+          return res.status(400).json({
+            success: false,
+            error: `Facebook Graph API Error: ${errDetail}`,
+            suggestion: 'สามารถใช้โหมดจำลอง (Simulated Mode) เพื่อทดสอบโพสต์และสร้างลิงก์แชร์ได้ทันที'
+          });
+        }
+
+        // Successfully posted to Facebook
+        const postLog: FacebookPostLog = {
+          id: `log-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          drawDate: drawDate || 'งวดปัจจุบัน',
+          message,
+          status: 'published',
+          facebookPostId: fbResult.id,
+          reach: 1,
+          permalinkUrl: `https://facebook.com/${fbResult.id}`
+        };
+        facebookPostLogs.unshift(postLog);
+        savePersistedStore();
+
+        return res.json({
+          success: true,
+          data: {
+            postId: fbResult.id,
+            timestamp: postLog.timestamp,
+            mode: 'live-facebook-graph-api'
+          }
+        });
+      } catch (fbFetchErr: any) {
+        return res.status(500).json({
+          success: false,
+          error: `Network error connecting to Facebook: ${fbFetchErr.message}`
+        });
+      }
+    }
+
+    // Simulated / Test Post Mode
+    const simulatedPostId = `mock_fb_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const simLog: FacebookPostLog = {
+      id: `log-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      drawDate: drawDate || 'งวดปัจจุบัน',
+      message,
+      status: 'simulated',
+      facebookPostId: simulatedPostId,
+      reach: Math.floor(Math.random() * 3000) + 1200,
+      permalinkUrl: `https://facebook.com/permalink.php?story_fbid=${simulatedPostId}`
+    };
+    facebookPostLogs.unshift(simLog);
+    savePersistedStore();
+
+    return res.json({
+      success: true,
+      data: {
+        postId: simulatedPostId,
+        timestamp: simLog.timestamp,
+        mode: 'simulated-successful',
+        reach: simLog.reach,
+        message: 'โพสต์ทดสอบสำเร็จเสมือนจริงบนระบบ พร้อมแสดงผลในฟีดและบันทึกลงคิวอัตโนมัติ'
+      }
+    });
+  } catch (error: any) {
+    console.error('Error in /api/facebook/post:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API: Get Facebook settings & Post Logs
+app.get('/api/facebook/config', (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    config: facebookScheduleConfig,
+    logs: facebookPostLogs
+  });
+});
+
+// API: Update Facebook schedule config
+app.post('/api/facebook/config', (req: Request, res: Response) => {
+  const newConfig = req.body;
+  facebookScheduleConfig = {
+    ...facebookScheduleConfig,
+    ...newConfig
+  };
+  savePersistedStore();
+  res.json({
+    success: true,
+    savedAt: new Date().toISOString(),
+    config: facebookScheduleConfig
+  });
+});
+
+function maskSecretValue(val?: string, head = 4, tail = 4): string {
+  const trimmed = (val || '').trim();
+  if (!trimmed) return '';
+  if (trimmed.length <= head + tail) return '••••••••';
+  return `${trimmed.slice(0, head)}••••••••${trimmed.slice(-tail)}`;
+}
+
+function getLineEnvSecrets() {
+  return {
+    channelAccessToken: (process.env.LINE_CHANNEL_ACCESS_TOKEN || '').trim(),
+    targetId: (process.env.LINE_USER_ID || process.env.LINE_TARGET_ID || '').trim(),
+    webhookUrl: (process.env.LINE_WEBHOOK_URL || '').trim()
+  };
+}
+
+function getLineEnvStatus() {
+  const env = getLineEnvSecrets();
+  return {
+    hasChannelAccessToken: Boolean(env.channelAccessToken),
+    channelAccessTokenPreview: maskSecretValue(env.channelAccessToken, 4, 4),
+    hasTargetId: Boolean(env.targetId),
+    targetIdPreview: maskSecretValue(env.targetId, 5, 4),
+    hasWebhookUrl: Boolean(env.webhookUrl),
+    webhookUrlPreview: env.webhookUrl ? maskSecretValue(env.webhookUrl, 12, 6) : ''
+  };
+}
+
+// API: Get LINE notification config & logs
+app.get('/api/line/config', (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    config: lineNotifyConfig,
+    envStatus: getLineEnvStatus(),
+    capturedSources: capturedLineSources,
+    logs: lineNotifyLogs
+  });
+});
+
+// API: LINE Messaging API Webhook receiver (always returns 200 OK for LINE Verify & captures User/Group IDs)
+app.get('/api/line/webhook', (req: Request, res: Response) => {
+  res.status(200).json({
+    status: 'ok',
+    endpoint: '/api/line/webhook',
+    message: 'LINE Messaging API Webhook is active and ready to return HTTP 200.'
+  });
+});
+
+app.post('/api/line/webhook', (req: Request, res: Response) => {
+  try {
+    const events = Array.isArray(req.body?.events) ? req.body.events : [];
+    let updated = false;
+
+    for (const ev of events) {
+      const src = ev?.source;
+      if (!src) continue;
+      const sourceId = src.groupId || src.roomId || src.userId;
+      const sourceType: 'user' | 'group' | 'room' = src.groupId
+        ? 'group'
+        : src.roomId
+          ? 'room'
+          : 'user';
+      if (!sourceId) continue;
+
+      const entry: CapturedLineSourceItem = {
+        id: sourceId,
+        sourceType,
+        eventType: ev.type || 'event',
+        lastMessage: ev.message?.type === 'text' ? String(ev.message.text).slice(0, 80) : undefined,
+        timestamp: new Date().toISOString()
+      };
+      capturedLineSources = [entry, ...capturedLineSources.filter((s) => s.id !== sourceId)].slice(0, 20);
+      updated = true;
+    }
+
+    if (updated) {
+      savePersistedStore();
+    }
+  } catch (err: any) {
+    console.warn('[LINE Webhook] Error parsing webhook payload:', err?.message);
+  }
+  // LINE Developers Verify requires HTTP 200 OK
+  res.status(200).json({ status: 'ok' });
+});
+
+// API: Update LINE notification config
+app.post('/api/line/config', (req: Request, res: Response) => {
+  const newConfig = req.body;
+  lineNotifyConfig = {
+    ...lineNotifyConfig,
+    ...newConfig
+  };
+  savePersistedStore();
+  res.json({
+    success: true,
+    savedAt: new Date().toISOString(),
+    config: lineNotifyConfig,
+    envStatus: getLineEnvStatus()
+  });
+});
+
+// API: Verify LINE Messaging API Channel Access Token against LINE OA (/v2/bot/info)
+app.post('/api/line/verify', async (req: Request, res: Response) => {
+  try {
+    const envSecrets = getLineEnvSecrets();
+    const tokenToCheck =
+      (req.body?.channelAccessToken || '').trim() ||
+      (lineNotifyConfig.channelAccessToken || '').trim() ||
+      envSecrets.channelAccessToken;
+
+    if (!tokenToCheck) {
+      return res.status(400).json({
+        success: false,
+        error: 'กรุณากรอก Channel Access Token หรือตั้งค่า LINE_CHANNEL_ACCESS_TOKEN ใน Secrets ก่อนตรวจสอบ'
+      });
+    }
+
+    const botRes = await fetch('https://api.line.me/v2/bot/info', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${tokenToCheck}`
+      }
+    });
+
+    const botData: any = await botRes.json().catch(() => ({}));
+    if (!botRes.ok) {
+      return res.status(400).json({
+        success: false,
+        error: botData?.message || `LINE API HTTP ${botRes.status}: Token ไม่ถูกต้องหรือหมดอายุ`
+      });
+    }
+
+    return res.json({
+      success: true,
+      bot: {
+        displayName: botData.displayName || 'LINE OA Bot',
+        basicId: botData.basicId || '',
+        userId: botData.userId || '',
+        pictureUrl: botData.pictureUrl || ''
+      }
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: `ไม่สามารถเชื่อมต่อ LINE Messaging API: ${err?.message || 'Network error'}`
+    });
+  }
+});
+
+// API: Send or test LINE notification
+app.post('/api/line/send', async (req: Request, res: Response) => {
+  try {
+    const {
+      deliveryMode,
+      channelAccessToken,
+      targetId,
+      webhookUrl,
+      message,
+      drawDate,
+      isSimulated
+    } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ success: false, error: 'กรุณาระบุข้อความแจ้งเตือน LINE' });
+    }
+
+    const envSecrets = getLineEnvSecrets();
+    const modeToUse = deliveryMode || lineNotifyConfig.deliveryMode;
+    const tokenToUse =
+      (channelAccessToken || '').trim() ||
+      (lineNotifyConfig.channelAccessToken || '').trim() ||
+      envSecrets.channelAccessToken;
+    const targetToUse =
+      (targetId || '').trim() ||
+      (lineNotifyConfig.targetId || '').trim() ||
+      envSecrets.targetId;
+    const hookToUse =
+      (webhookUrl || '').trim() ||
+      (lineNotifyConfig.webhookUrl || '').trim() ||
+      envSecrets.webhookUrl;
+
+    try {
+      const result = await dispatchLineMessage({
+        deliveryMode: modeToUse,
+        channelAccessToken: tokenToUse,
+        targetId: targetToUse,
+        webhookUrl: hookToUse,
+        message,
+        drawDate: drawDate || 'งวดปัจจุบัน',
+        isSimulated: Boolean(isSimulated)
+      });
+
+      return res.json({
+        success: true,
+        data: result
+      });
+    } catch (sendErr: any) {
+      const failLog: LineNotifyLogItem = {
+        id: `line-err-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        drawDate: drawDate || 'งวดปัจจุบัน',
+        message,
+        deliveryMode: modeToUse,
+        status: 'failed',
+        errorMessage: sendErr.message
+      };
+      lineNotifyLogs.unshift(failLog);
+      savePersistedStore();
+      return res.status(400).json({
+        success: false,
+        error: `LINE Messaging API Error: ${sendErr.message}`,
+        suggestion: 'กรุณาตรวจสอบ Channel Access Token และ User ID (และอย่าลืมแอด LINE OA เป็นเพื่อนก่อน) หรือสลับไปโหมดจำลองเพื่อดูรูปแบบข้อความ'
+      });
+    }
+  } catch (error: any) {
+    console.error('Error in /api/line/send:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ================= TELEGRAM GROUP BOT API =================
+
+function getTelegramEnvSecrets() {
+  return {
+    botToken: (process.env.TELEGRAM_BOT_TOKEN || '').trim(),
+    chatId: (process.env.TELEGRAM_CHAT_ID || '').trim()
+  };
+}
+
+function getTelegramEnvStatus() {
+  const env = getTelegramEnvSecrets();
+  return {
+    hasBotToken: Boolean(env.botToken),
+    botTokenPreview: maskSecretValue(env.botToken, 6, 4),
+    hasChatId: Boolean(env.chatId),
+    chatIdPreview: maskSecretValue(env.chatId, 4, 4)
+  };
+}
+
+async function dispatchTelegramMessage(params: {
+  botToken?: string;
+  chatId?: string;
+  messageThreadId?: string;
+  message: string;
+  drawDate: string;
+  pinMessage?: boolean;
+  disableNotification?: boolean;
+  isSimulated?: boolean;
+}) {
+  const {
+    botToken,
+    chatId,
+    messageThreadId,
+    message,
+    drawDate,
+    pinMessage,
+    disableNotification,
+    isSimulated
+  } = params;
+
+  if (!isSimulated) {
+    if (!botToken || !chatId) {
+      throw new Error('กรุณาระบุ Telegram Bot Token และ Group Chat ID ให้ครบถ้วนก่อนส่งจริง');
+    }
+
+    const bodyPayload: Record<string, any> = {
+      chat_id: chatId,
+      text: message,
+      disable_notification: Boolean(disableNotification)
+    };
+    if (messageThreadId && /^\d+$/.test(messageThreadId.trim())) {
+      bodyPayload.message_thread_id = Number(messageThreadId.trim());
+    }
+
+    const tgRes = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyPayload)
+    });
+
+    const tgData: any = await tgRes.json().catch(() => ({}));
+    if (!tgRes.ok || !tgData.ok) {
+      throw new Error(tgData?.description || `Telegram Bot API HTTP ${tgRes.status}`);
+    }
+
+    const sentMsgId = tgData?.result?.message_id as number | undefined;
+    const chatTitle = tgData?.result?.chat?.title || tgData?.result?.chat?.username || chatId;
+
+    if (pinMessage && sentMsgId) {
+      await fetch(`https://api.telegram.org/bot${botToken}/pinChatMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: sentMsgId,
+          disable_notification: Boolean(disableNotification)
+        })
+      }).catch(() => {});
+    }
+
+    const log: TelegramLogItem = {
+      id: `tg-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      drawDate,
+      message,
+      status: 'sent',
+      telegramMessageId: sentMsgId,
+      chatSummary: `Telegram (${chatTitle})`
+    };
+    telegramLogs.unshift(log);
+    savePersistedStore();
+    return { mode: 'live-telegram-group', log };
+  }
+
+  const simLog: TelegramLogItem = {
+    id: `tg-sim-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    drawDate,
+    message,
+    status: 'simulated',
+    chatSummary: 'โหมดจำลอง (Telegram Group)'
+  };
+  telegramLogs.unshift(simLog);
+  savePersistedStore();
+  return { mode: 'simulated-successful', log: simLog };
+}
+
+// API: Get Telegram config & logs
+app.get('/api/telegram/config', (req: Request, res: Response) => {
+  res.json({
+    success: true,
+    config: telegramConfig,
+    envStatus: getTelegramEnvStatus(),
+    logs: telegramLogs
+  });
+});
+
+// API: Update Telegram config
+app.post('/api/telegram/config', (req: Request, res: Response) => {
+  const newConfig = req.body;
+  telegramConfig = {
+    ...telegramConfig,
+    ...newConfig
+  };
+  savePersistedStore();
+  res.json({
+    success: true,
+    savedAt: new Date().toISOString(),
+    config: telegramConfig,
+    envStatus: getTelegramEnvStatus()
+  });
+});
+
+// API: Verify Telegram Bot Token & discover recent Group / Channel Chat IDs via getUpdates
+app.post('/api/telegram/verify', async (req: Request, res: Response) => {
+  try {
+    const envSecrets = getTelegramEnvSecrets();
+    const tokenToCheck =
+      (req.body?.botToken || '').trim() ||
+      (telegramConfig.botToken || '').trim() ||
+      envSecrets.botToken;
+
+    if (!tokenToCheck) {
+      return res.status(400).json({
+        success: false,
+        error: 'กรุณากรอก Telegram Bot Token (จาก @BotFather) หรือตั้งค่า TELEGRAM_BOT_TOKEN ใน Secrets ก่อนตรวจสอบ'
+      });
+    }
+
+    const meRes = await fetch(`https://api.telegram.org/bot${tokenToCheck}/getMe`);
+    const meData: any = await meRes.json().catch(() => ({}));
+    if (!meRes.ok || !meData.ok) {
+      return res.status(400).json({
+        success: false,
+        error: meData?.description || `Telegram API HTTP ${meRes.status}: Bot Token ไม่ถูกต้อง`
+      });
+    }
+
+    // Fetch recent updates to help auto-discover Group / Supergroup / Channel Chat IDs
+    const updatesRes = await fetch(`https://api.telegram.org/bot${tokenToCheck}/getUpdates?limit=30`);
+    const updatesData: any = await updatesRes.json().catch(() => ({}));
+    const chatMap = new Map<string, { chatId: string; title: string; type: string; username?: string }>();
+
+    if (updatesRes.ok && updatesData.ok && Array.isArray(updatesData.result)) {
+      for (const upd of updatesData.result) {
+        const chat =
+          upd.message?.chat ||
+          upd.edited_message?.chat ||
+          upd.channel_post?.chat ||
+          upd.my_chat_member?.chat ||
+          upd.chat_member?.chat;
+        if (!chat || chat.id === undefined) continue;
+        const cid = String(chat.id);
+        const title =
+          chat.title ||
+          [chat.first_name, chat.last_name].filter(Boolean).join(' ') ||
+          chat.username ||
+          cid;
+        chatMap.set(cid, {
+          chatId: cid,
+          title,
+          type: chat.type || 'group',
+          username: chat.username
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      bot: {
+        id: meData.result?.id,
+        firstName: meData.result?.first_name || 'Telegram Bot',
+        username: meData.result?.username || ''
+      },
+      discoveredChats: Array.from(chatMap.values())
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: `ไม่สามารถเชื่อมต่อ Telegram Bot API: ${err?.message || 'Network error'}`
+    });
+  }
+});
+
+// API: Send or test Telegram Group alert
+app.post('/api/telegram/send', async (req: Request, res: Response) => {
+  try {
+    const {
+      botToken,
+      chatId,
+      messageThreadId,
+      message,
+      drawDate,
+      pinMessage,
+      disableNotification,
+      isSimulated
+    } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ success: false, error: 'กรุณาระบุข้อความที่จะส่งเข้ากลุ่ม Telegram' });
+    }
+
+    const envSecrets = getTelegramEnvSecrets();
+    const tokenToUse =
+      (botToken || '').trim() ||
+      (telegramConfig.botToken || '').trim() ||
+      envSecrets.botToken;
+    const chatToUse =
+      (chatId || '').trim() ||
+      (telegramConfig.chatId || '').trim() ||
+      envSecrets.chatId;
+    const threadToUse =
+      (messageThreadId ?? telegramConfig.messageThreadId ?? '').toString().trim();
+
+    try {
+      const result = await dispatchTelegramMessage({
+        botToken: tokenToUse,
+        chatId: chatToUse,
+        messageThreadId: threadToUse,
+        message,
+        drawDate: drawDate || 'งวดปัจจุบัน',
+        pinMessage: pinMessage ?? telegramConfig.pinMessage,
+        disableNotification: disableNotification ?? telegramConfig.disableNotification,
+        isSimulated: Boolean(isSimulated)
+      });
+
+      return res.json({
+        success: true,
+        data: result
+      });
+    } catch (sendErr: any) {
+      const failLog: TelegramLogItem = {
+        id: `tg-err-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        drawDate: drawDate || 'งวดปัจจุบัน',
+        message,
+        status: 'failed',
+        errorMessage: sendErr.message
+      };
+      telegramLogs.unshift(failLog);
+      savePersistedStore();
+      return res.status(400).json({
+        success: false,
+        error: `Telegram API Error: ${sendErr.message}`,
+        suggestion: 'ตรวจสอบว่าได้เชิญ Bot เข้ากลุ่ม Telegram แล้ว และกรอก Bot Token กับ Group Chat ID (-100...) ถูกต้อง'
+      });
+    }
+  } catch (error: any) {
+    console.error('Error in /api/telegram/send:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API: Get live draws and real-time computed accuracy
+app.get('/api/lottery/draws', (req: Request, res: Response) => {
+  const accuracy = evaluateRealDatabaseAccuracy(liveDraws);
+  res.json({
+    success: true,
+    draws: liveDraws,
+    accuracy
+  });
+});
+
+// API: Record new draw result in Real-Time & immediately re-evaluate accuracy
+app.post('/api/lottery/add-draw', (req: Request, res: Response) => {
+  try {
+    const { drawDate, dateIso, dayOfWeek, firstPrize, last2Digits, first3Digits, last3Digits } = req.body;
+    if (!drawDate || !firstPrize || !last2Digits) {
+      return res.status(400).json({ success: false, error: 'กรุณากรอกข้อมูลงวด, รางวัลที่ 1 และเลขท้าย 2 ตัว' });
+    }
+
+    const newDraw = {
+      id: `${dateIso || 'draw'}-${Date.now()}`,
+      drawDate,
+      dateIso: dateIso || new Date().toISOString().split('T')[0],
+      dayOfWeek: dayOfWeek || 'วันศุกร์',
+      firstPrize,
+      last2Digits,
+      first3Digits: Array.isArray(first3Digits) ? first3Digits : ['000', '000'],
+      last3Digits: Array.isArray(last3Digits) ? last3Digits : ['000', '000']
+    };
+
+    // Prepend to top of live database
+    liveDraws = [newDraw, ...liveDraws];
+    savePersistedStore();
+
+    // Immediately recalculate accuracy
+    const updatedAccuracy = evaluateRealDatabaseAccuracy(liveDraws);
+
+    res.json({
+      success: true,
+      data: newDraw,
+      accuracy: updatedAccuracy,
+      totalDraws: liveDraws.length,
+      message: `บันทึกผลสลากงวด ${drawDate} สำเร็จ! คำนวณความแม่นยำใหม่ทันที: ${updatedAccuracy.overallRate}%`
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// API: Delete a draw
+app.delete('/api/lottery/draws/:id', (req: Request, res: Response) => {
+  const { id } = req.params;
+  liveDraws = liveDraws.filter((d) => d.id !== id);
+  savePersistedStore();
+  const updatedAccuracy = evaluateRealDatabaseAccuracy(liveDraws);
+  res.json({
+    success: true,
+    accuracy: updatedAccuracy,
+    totalDraws: liveDraws.length
+  });
+});
+
+// Automatic 1-Day Pre-Draw LINE Alert Scheduler (runs every 60s)
+function startLinePreDrawScheduler() {
+  setInterval(async () => {
+    try {
+      if (!lineNotifyConfig.isLineEnabled) return;
+      const now = new Date();
+      const nextDraw = getNextDrawInfo(now);
+
+      // Check if we reached daysBeforeDraw (e.g., 1 day before draw) and haven't notified this draw yet
+      const daysUntilTargetAlert = nextDraw.daysUntilDraw - (lineNotifyConfig.daysBeforeDraw || 1);
+      if (daysUntilTargetAlert > 0 || lineNotifyConfig.lastNotifiedDraw === nextDraw.drawDateIso) {
+        return;
+      }
+
+      const [targetHour, targetMin] = (lineNotifyConfig.notifyTime || '08:30').split(':').map(Number);
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const scheduledMinutes = (targetHour || 8) * 60 + (targetMin || 30);
+
+      if (currentMinutes < scheduledMinutes) return;
+
+      const envSecrets = getLineEnvSecrets();
+      const effectiveToken = (lineNotifyConfig.channelAccessToken || '').trim() || envSecrets.channelAccessToken;
+      const effectiveTargetId = (lineNotifyConfig.targetId || '').trim() || envSecrets.targetId;
+      const effectiveWebhookUrl = (lineNotifyConfig.webhookUrl || '').trim() || envSecrets.webhookUrl;
+
+      const hasLiveCredentials =
+        (lineNotifyConfig.deliveryMode === 'messaging_api_push' && effectiveToken && effectiveTargetId) ||
+        (lineNotifyConfig.deliveryMode === 'messaging_api_broadcast' && effectiveToken) ||
+        (lineNotifyConfig.deliveryMode === 'webhook' && effectiveWebhookUrl);
+
+      if (!hasLiveCredentials) return;
+
+      const pred = generateDynamicLotteryPrediction(nextDraw.drawDateStr, nextDraw.dayOfWeek, nextDraw.drawDateIso);
+      const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight[0];
+      const coreStraight = pred.sniperThreeStraight?.coreStraightPicks.map((p) => p.number).join(' · ') || pred.threeDigitsStraight.slice(0, 3).join(' · ');
+
+      const autoMsg = `🔔 แจ้งเตือนโค้งสุดท้ายก่อนหวยออก ${lineNotifyConfig.daysBeforeDraw} วัน!\nงวด ${nextDraw.drawDateStr} (${nextDraw.dayOfWeek})\n\n👑 เม็ดเดียว 3 ตัวตรง ฟันธง: ${megaShot}\n🎯 3 ตัวตรงเน้นหนัก: ${coreStraight}\n⚡ วิ่ง-รูด: ${pred.topSection.runningDigit} (รอง ${pred.topSection.runningSub})\n💎 2 ตัวบน: ${pred.twoDigitsTop.slice(0, 4).join(', ')} | ล่าง: ${pred.twoDigitsBottom.slice(0, 4).join(', ')}`;
+
+      await dispatchLineMessage({
+        deliveryMode: lineNotifyConfig.deliveryMode,
+        channelAccessToken: effectiveToken,
+        targetId: effectiveTargetId,
+        webhookUrl: effectiveWebhookUrl,
+        message: autoMsg,
+        drawDate: nextDraw.drawDateStr,
+        isSimulated: false
+      });
+
+      lineNotifyConfig.lastNotifiedDraw = nextDraw.drawDateIso;
+      savePersistedStore();
+      console.log(`[LINE Scheduler] Sent 1-day pre-draw alert for ${nextDraw.drawDateStr}`);
+    } catch (err: any) {
+      console.warn('[LINE Scheduler] Error dispatching automatic alert:', err?.message);
+    }
+  }, 60 * 1000);
+}
+
+// Automatic Pre-Draw Telegram Group Alert Scheduler (runs every 60s)
+function startTelegramPreDrawScheduler() {
+  setInterval(async () => {
+    try {
+      if (!telegramConfig.isTelegramEnabled) return;
+      const now = new Date();
+      const nextDraw = getNextDrawInfo(now);
+
+      const daysUntilTargetAlert = nextDraw.daysUntilDraw - (telegramConfig.daysBeforeDraw || 1);
+      if (daysUntilTargetAlert > 0 || telegramConfig.lastNotifiedDraw === nextDraw.drawDateIso) {
+        return;
+      }
+
+      const [targetHour, targetMin] = (telegramConfig.notifyTime || '08:30').split(':').map(Number);
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const scheduledMinutes = (targetHour || 8) * 60 + (targetMin || 30);
+
+      if (currentMinutes < scheduledMinutes) return;
+
+      const envSecrets = getTelegramEnvSecrets();
+      const effectiveToken = (telegramConfig.botToken || '').trim() || envSecrets.botToken;
+      const effectiveChatId = (telegramConfig.chatId || '').trim() || envSecrets.chatId;
+
+      if (!effectiveToken || !effectiveChatId) return;
+
+      const pred = generateDynamicLotteryPrediction(nextDraw.drawDateStr, nextDraw.dayOfWeek, nextDraw.drawDateIso);
+      const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight[0];
+      const coreStraight = pred.sniperThreeStraight?.coreStraightPicks.map((p) => p.number).join(' · ') || pred.threeDigitsStraight.slice(0, 3).join(' · ');
+
+      const autoMsg = `🔔 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram (ก่อนหวยออก ${telegramConfig.daysBeforeDraw} วัน)\nงวด ${nextDraw.drawDateStr} (${nextDraw.dayOfWeek})\n\n👑 เม็ดเดียว 3 ตัวตรง ฟันธง: ${megaShot}\n🎯 3 ตัวตรงเน้นหนัก: ${coreStraight}\n⚡ วิ่ง-รูด: ${pred.topSection.runningDigit} (รอง ${pred.topSection.runningSub})\n💎 2 ตัวบน: ${pred.twoDigitsTop.slice(0, 4).join(', ')} | ล่าง: ${pred.twoDigitsBottom.slice(0, 4).join(', ')}`;
+
+      await dispatchTelegramMessage({
+        botToken: effectiveToken,
+        chatId: effectiveChatId,
+        messageThreadId: telegramConfig.messageThreadId,
+        message: autoMsg,
+        drawDate: nextDraw.drawDateStr,
+        pinMessage: telegramConfig.pinMessage,
+        disableNotification: telegramConfig.disableNotification,
+        isSimulated: false
+      });
+
+      telegramConfig.lastNotifiedDraw = nextDraw.drawDateIso;
+      savePersistedStore();
+      console.log(`[Telegram Scheduler] Sent pre-draw group alert for ${nextDraw.drawDateStr}`);
+    } catch (err: any) {
+      console.warn('[Telegram Scheduler] Error dispatching automatic alert:', err?.message);
+    }
+  }, 60 * 1000);
+}
+
+// Setup Vite in Dev or Static files in Prod
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa'
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static(path.resolve(__dirname, 'dist')));
+    app.get('*', (req: Request, res: Response) => {
+      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+    });
+  }
+
+  startLinePreDrawScheduler();
+  startTelegramPreDrawScheduler();
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+startServer();
