@@ -665,13 +665,21 @@ async function dispatchTelegramMessage(params: {
   return { mode: 'simulated-successful', log: simLog };
 }
 
+// Lightweight health endpoint for cron-job.org / UptimeRobot
+app.get('/api/health', (req: Request, res: Response) => {
+  res.json({ ok: true });
+});
+
 // API: Get Telegram config & logs
 app.get('/api/telegram/config', (req: Request, res: Response) => {
+  if (req.query.ping === '1') {
+    return res.json({ ok: true });
+  }
   res.json({
     success: true,
     config: telegramConfig,
     envStatus: getTelegramEnvStatus(),
-    logs: telegramLogs
+    logs: telegramLogs.slice(0, 25)
   });
 });
 
@@ -892,56 +900,99 @@ app.delete('/api/lottery/draws/:id', (req: Request, res: Response) => {
   });
 });
 
+// Compute current date/time in Thailand timezone (Asia/Bangkok, UTC+7)
+function getBangkokNow(): Date {
+  const now = new Date();
+  const bangkokMs = now.getTime() + (now.getTimezoneOffset() + 7 * 60) * 60 * 1000;
+  return new Date(bangkokMs);
+}
+
+// Run a single check & send pre-draw Telegram group alert if due
+async function runTelegramPreDrawTick(): Promise<{ ok: boolean; status: string; drawDate: string }> {
+  const now = getBangkokNow();
+  const nextDraw = getNextDrawInfo(now);
+
+  if (!telegramConfig.isTelegramEnabled) {
+    return { ok: true, status: 'disabled', drawDate: nextDraw.drawDateIso };
+  }
+
+  const daysUntilTargetAlert = nextDraw.daysUntilDraw - (telegramConfig.daysBeforeDraw || 1);
+  if (telegramConfig.lastNotifiedDraw === nextDraw.drawDateIso) {
+    return { ok: true, status: 'already_sent', drawDate: nextDraw.drawDateIso };
+  }
+  if (daysUntilTargetAlert > 0) {
+    return { ok: true, status: 'not_due_yet', drawDate: nextDraw.drawDateIso };
+  }
+
+  const [targetHour, targetMin] = (telegramConfig.notifyTime || '08:30').split(':').map(Number);
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const scheduledMinutes = (targetHour || 8) * 60 + (targetMin || 30);
+
+  if (currentMinutes < scheduledMinutes) {
+    return { ok: true, status: 'waiting_notify_time', drawDate: nextDraw.drawDateIso };
+  }
+
+  const envSecrets = getTelegramEnvSecrets();
+  const effectiveToken = (telegramConfig.botToken || '').trim() || envSecrets.botToken;
+  const effectiveChatId = (telegramConfig.chatId || '').trim() || envSecrets.chatId;
+
+  if (!effectiveToken || !effectiveChatId) {
+    return { ok: true, status: 'missing_credentials', drawDate: nextDraw.drawDateIso };
+  }
+
+  const pred = generateDynamicLotteryPrediction(nextDraw.drawDateStr, nextDraw.dayOfWeek, nextDraw.drawDateIso);
+  const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight[0];
+  const coreStraight = pred.sniperThreeStraight?.coreStraightPicks.map((p) => p.number).join(' · ') || pred.threeDigitsStraight.slice(0, 3).join(' · ');
+
+  const autoMsg = `🔔 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram (ก่อนหวยออก ${telegramConfig.daysBeforeDraw} วัน)\nงวด ${nextDraw.drawDateStr} (${nextDraw.dayOfWeek})\n\n👑 เม็ดเดียว 3 ตัวตรง ฟันธง: ${megaShot}\n🎯 3 ตัวตรงเน้นหนัก: ${coreStraight}\n⚡ วิ่ง-รูด: ${pred.topSection.runningDigit} (รอง ${pred.topSection.runningSub})\n💎 2 ตัวบน: ${pred.twoDigitsTop.slice(0, 4).join(', ')} | ล่าง: ${pred.twoDigitsBottom.slice(0, 4).join(', ')}`;
+
+  await dispatchTelegramMessage({
+    botToken: effectiveToken,
+    chatId: effectiveChatId,
+    messageThreadId: telegramConfig.messageThreadId,
+    message: autoMsg,
+    drawDate: nextDraw.drawDateStr,
+    pinMessage: telegramConfig.pinMessage,
+    disableNotification: telegramConfig.disableNotification,
+    isSimulated: false
+  });
+
+  telegramConfig.lastNotifiedDraw = nextDraw.drawDateIso;
+  savePersistedStore();
+  console.log(`[Telegram Scheduler] Sent pre-draw group alert for ${nextDraw.drawDateStr}`);
+  return { ok: true, status: 'sent', drawDate: nextDraw.drawDateIso };
+}
+
+// Lightweight HTTP cron endpoints for cron-job.org (tiny JSON response < 100 bytes)
+const handleTelegramCronTick = async (_req: Request, res: Response) => {
+  try {
+    const result = await runTelegramPreDrawTick();
+    res.json(result);
+  } catch (err: any) {
+    console.warn('[Telegram Cron] Error:', err?.message);
+    res.status(500).json({ ok: false, error: err?.message || 'cron_error' });
+  }
+};
+
+app.all('/api/telegram/cron-tick', handleTelegramCronTick);
+app.all('/api/telegram/cron-trigger', handleTelegramCronTick);
+app.all('/api/telegram/cron', handleTelegramCronTick);
+
 // Automatic Pre-Draw Telegram Group Alert Scheduler (runs every 60s)
 function startTelegramPreDrawScheduler() {
   setInterval(async () => {
     try {
-      if (!telegramConfig.isTelegramEnabled) return;
-      const now = new Date();
-      const nextDraw = getNextDrawInfo(now);
-
-      const daysUntilTargetAlert = nextDraw.daysUntilDraw - (telegramConfig.daysBeforeDraw || 1);
-      if (daysUntilTargetAlert > 0 || telegramConfig.lastNotifiedDraw === nextDraw.drawDateIso) {
-        return;
-      }
-
-      const [targetHour, targetMin] = (telegramConfig.notifyTime || '08:30').split(':').map(Number);
-      const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      const scheduledMinutes = (targetHour || 8) * 60 + (targetMin || 30);
-
-      if (currentMinutes < scheduledMinutes) return;
-
-      const envSecrets = getTelegramEnvSecrets();
-      const effectiveToken = (telegramConfig.botToken || '').trim() || envSecrets.botToken;
-      const effectiveChatId = (telegramConfig.chatId || '').trim() || envSecrets.chatId;
-
-      if (!effectiveToken || !effectiveChatId) return;
-
-      const pred = generateDynamicLotteryPrediction(nextDraw.drawDateStr, nextDraw.dayOfWeek, nextDraw.drawDateIso);
-      const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight[0];
-      const coreStraight = pred.sniperThreeStraight?.coreStraightPicks.map((p) => p.number).join(' · ') || pred.threeDigitsStraight.slice(0, 3).join(' · ');
-
-      const autoMsg = `🔔 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram (ก่อนหวยออก ${telegramConfig.daysBeforeDraw} วัน)\nงวด ${nextDraw.drawDateStr} (${nextDraw.dayOfWeek})\n\n👑 เม็ดเดียว 3 ตัวตรง ฟันธง: ${megaShot}\n🎯 3 ตัวตรงเน้นหนัก: ${coreStraight}\n⚡ วิ่ง-รูด: ${pred.topSection.runningDigit} (รอง ${pred.topSection.runningSub})\n💎 2 ตัวบน: ${pred.twoDigitsTop.slice(0, 4).join(', ')} | ล่าง: ${pred.twoDigitsBottom.slice(0, 4).join(', ')}`;
-
-      await dispatchTelegramMessage({
-        botToken: effectiveToken,
-        chatId: effectiveChatId,
-        messageThreadId: telegramConfig.messageThreadId,
-        message: autoMsg,
-        drawDate: nextDraw.drawDateStr,
-        pinMessage: telegramConfig.pinMessage,
-        disableNotification: telegramConfig.disableNotification,
-        isSimulated: false
-      });
-
-      telegramConfig.lastNotifiedDraw = nextDraw.drawDateIso;
-      savePersistedStore();
-      console.log(`[Telegram Scheduler] Sent pre-draw group alert for ${nextDraw.drawDateStr}`);
+      await runTelegramPreDrawTick();
     } catch (err: any) {
       console.warn('[Telegram Scheduler] Error dispatching automatic alert:', err?.message);
     }
   }, 60 * 1000);
 }
+
+// Ensure unknown /api/* routes return tiny JSON 404 instead of index.html
+app.all('/api/*', (req: Request, res: Response) => {
+  res.status(404).json({ ok: false, error: `Unknown API route: ${req.path}` });
+});
 
 // Setup Vite in Dev or Static files in Prod
 async function startServer() {
