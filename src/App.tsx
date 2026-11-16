@@ -3,7 +3,6 @@ import { Header, AppTab } from './components/Header';
 import { DashboardView } from './components/DashboardView';
 import { AnalyzerView } from './components/AnalyzerView';
 import { FacebookAutoPostView } from './components/FacebookAutoPostView';
-import { LineNotifyView } from './components/LineNotifyView';
 import { TelegramGroupView } from './components/TelegramGroupView';
 import { StatisticsView } from './components/StatisticsView';
 import { BacktestingView } from './components/BacktestingView';
@@ -26,7 +25,6 @@ export default function App() {
   const [isLiveDrawModalOpen, setIsLiveDrawModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isAutoPostEnabled, setIsAutoPostEnabled] = useState(true);
-  const [isLineEnabled, setIsLineEnabled] = useState(true);
   const [isTelegramEnabled, setIsTelegramEnabled] = useState(true);
 
   // Compute live verified accuracy from real database
@@ -91,7 +89,7 @@ export default function App() {
     }));
   };
 
-  // Fetch initial Facebook Auto-Post & LINE Notification configurations
+  // Fetch initial Facebook Auto-Post & Telegram configurations
   useEffect(() => {
     fetch('/api/facebook/config')
       .then((res) => res.json())
@@ -101,15 +99,6 @@ export default function App() {
         }
       })
       .catch((e) => console.error('Error fetching facebook config:', e));
-
-    fetch('/api/line/config')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && data.config) {
-          setIsLineEnabled(data.config.isLineEnabled ?? true);
-        }
-      })
-      .catch((e) => console.error('Error fetching line config:', e));
 
     fetch('/api/telegram/config')
       .then((res) => res.json())
@@ -157,7 +146,6 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         isAutoPostEnabled={isAutoPostEnabled}
-        isLineEnabled={isLineEnabled}
         isTelegramEnabled={isTelegramEnabled}
       />
 
@@ -173,7 +161,6 @@ export default function App() {
             selectedDrawId={selectedDrawId}
             onSelectDraw={handleSelectDraw}
             onNavigateToAutoPost={() => setActiveTab('autopost')}
-            onNavigateToLineNotify={() => setActiveTab('linenotify')}
             onNavigateToTelegram={() => setActiveTab('telegram')}
             onNavigateToBacktest={() => setActiveTab('backtest')}
             onOpenCardModal={() => setIsCardModalOpen(true)}
@@ -190,14 +177,6 @@ export default function App() {
             nextDraw={nextDraw}
             onRunAnalysis={handleRunAnalysis}
             isLoading={isLoading}
-          />
-        )}
-
-        {activeTab === 'linenotify' && (
-          <LineNotifyView
-            prediction={prediction}
-            nextDraw={nextDraw}
-            onEnabledChange={setIsLineEnabled}
           />
         )}
 

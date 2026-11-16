@@ -172,48 +172,6 @@ export interface FacebookPostLog {
   errorMessage?: string;
 }
 
-export interface LineNotifyConfig {
-  isLineEnabled: boolean;
-  daysBeforeDraw: number; // default 1 day before draw
-  notifyTime: string; // e.g. "08:30"
-  deliveryMode: 'messaging_api_push' | 'messaging_api_broadcast' | 'webhook';
-  channelAccessToken: string;
-  targetId: string; // LINE User ID or Group ID
-  webhookUrl: string;
-  includeThreeStraight: boolean;
-  includeTwoDigits: boolean;
-  includeRunners: boolean;
-  lastNotifiedDraw?: string;
-}
-
-export interface LineEnvStatus {
-  hasChannelAccessToken: boolean;
-  channelAccessTokenPreview?: string;
-  hasTargetId: boolean;
-  targetIdPreview?: string;
-  hasWebhookUrl: boolean;
-  webhookUrlPreview?: string;
-}
-
-export interface CapturedLineSource {
-  id: string;
-  sourceType: 'user' | 'group' | 'room';
-  eventType: string;
-  lastMessage?: string;
-  timestamp: string;
-}
-
-export interface LineNotifyLog {
-  id: string;
-  timestamp: string;
-  drawDate: string;
-  message: string;
-  deliveryMode: string;
-  status: 'sent' | 'scheduled' | 'failed' | 'simulated';
-  recipientSummary?: string;
-  errorMessage?: string;
-}
-
 export interface TelegramConfig {
   isTelegramEnabled: boolean;
   daysBeforeDraw: number; // 1 to 5 days before draw
@@ -263,9 +221,5 @@ export interface NextDrawInfo {
   autoPostDateStr: string;
   daysUntilAutoPost: number;
   isAutoPostDue: boolean;
-  lineNotifyDateIso: string;
-  lineNotifyDateStr: string;
-  daysUntilLineNotify: number;
-  isLineNotifyDue: boolean;
 }
 

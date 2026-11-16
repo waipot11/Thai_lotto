@@ -17,7 +17,6 @@ import {
   Crosshair,
   ShieldAlert,
   Layers,
-  Bell,
   Send
 } from 'lucide-react';
 
@@ -30,7 +29,6 @@ interface DashboardViewProps {
   selectedDrawId?: string;
   onSelectDraw?: (drawId: string) => void;
   onNavigateToAutoPost: () => void;
-  onNavigateToLineNotify: () => void;
   onNavigateToTelegram: () => void;
   onNavigateToBacktest: () => void;
   onOpenCardModal: () => void;
@@ -50,7 +48,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   selectedDrawId = 'next',
   onSelectDraw,
   onNavigateToAutoPost,
-  onNavigateToLineNotify,
   onNavigateToTelegram,
   onNavigateToBacktest,
   onOpenCardModal,
@@ -767,44 +764,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* Right Sidebar Stack: 1-Day LINE Alert & 5-Day Facebook Auto-Post */}
+        {/* Right Sidebar Stack: Telegram Group Alert & 5-Day Facebook Auto-Post */}
         <div className="space-y-6">
-          {/* 1-Day Pre-Draw LINE Alert Card */}
-          <div className="rounded-2xl bg-gradient-to-br from-emerald-950/60 to-slate-900 border border-emerald-500/30 p-6 space-y-4">
-            <div className="flex items-center justify-between text-xs text-emerald-300 font-medium">
-              <span className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/30">
-                <Bell className="w-5 h-5" />
-              </span>
-              <span>แจ้งเตือนล่วงหน้าก่อนหวยออก 1 วัน</span>
-            </div>
-
-            <h3 className="text-lg font-bold text-white">ระบบแจ้งเตือนทาง LINE</h3>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              ส่งสรุปเม็ดเดียว 3 ตัวตรง ({megaShot}) และเลขเด่นโค้งสุดท้ายเข้าแชทหรือกลุ่ม LINE อัตโนมัติก่อนหวยออก 1 วัน
-            </p>
-
-            <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3 text-xs space-y-2 tabular-nums">
-              <div className="flex justify-between text-slate-400">
-                <span>วันแจ้งเตือน LINE:</span>
-                <strong className="text-emerald-300">{nextDraw.lineNotifyDateStr}</strong>
-              </div>
-              <div className="flex justify-between text-slate-400">
-                <span>นับถอยหลังแจ้งเตือน:</span>
-                <strong className="text-amber-400">
-                  {nextDraw.daysUntilLineNotify <= 0 ? 'ถึงกำหนดส่งวันนี้' : `อีก ${nextDraw.daysUntilLineNotify} วัน`}
-                </strong>
-              </div>
-            </div>
-
-            <button
-              onClick={onNavigateToLineNotify}
-              className="w-full py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm flex items-center justify-center gap-2 transition-colors whitespace-nowrap shrink-0"
-            >
-              <span>ตั้งค่าและทดสอบแจ้งเตือน LINE</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-
           {/* Telegram Group Alert Card */}
           <div className="rounded-2xl bg-gradient-to-br from-sky-950/60 to-slate-900 border border-sky-500/30 p-6 space-y-4">
             <div className="flex items-center justify-between text-xs text-sky-300 font-medium">

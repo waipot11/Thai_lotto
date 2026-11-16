@@ -726,18 +726,11 @@ export function getNextDrawInfo(referenceDate = new Date()): NextDrawInfo {
   const autoPostDate = new Date(nextDrawDate);
   autoPostDate.setDate(autoPostDate.getDate() - 5);
 
-  // Calculate 1 day before draw (LINE Alert)
-  const lineNotifyDate = new Date(nextDrawDate);
-  lineNotifyDate.setDate(lineNotifyDate.getDate() - 1);
-
   const diffTimeDraw = nextDrawDate.getTime() - referenceDate.getTime();
   const daysUntilDraw = Math.max(0, Math.ceil(diffTimeDraw / (1000 * 60 * 60 * 24)));
 
   const diffTimeAutoPost = autoPostDate.getTime() - referenceDate.getTime();
   const daysUntilAutoPost = Math.ceil(diffTimeAutoPost / (1000 * 60 * 60 * 24));
-
-  const diffTimeLine = lineNotifyDate.getTime() - referenceDate.getTime();
-  const daysUntilLineNotify = Math.ceil(diffTimeLine / (1000 * 60 * 60 * 24));
 
   const thaiBuddhistYear = nextDrawDate.getFullYear() + 543;
   const drawDateStr = `${nextDrawDate.getDate()} ${THAI_MONTH_NAMES[nextDrawDate.getMonth()]} ${thaiBuddhistYear}`;
@@ -746,13 +739,9 @@ export function getNextDrawInfo(referenceDate = new Date()): NextDrawInfo {
   const autoPostYear = autoPostDate.getFullYear() + 543;
   const autoPostDateStr = `${autoPostDate.getDate()} ${THAI_MONTH_NAMES[autoPostDate.getMonth()]} ${autoPostYear}`;
 
-  const lineNotifyYear = lineNotifyDate.getFullYear() + 543;
-  const lineNotifyDateStr = `${lineNotifyDate.getDate()} ${THAI_MONTH_NAMES[lineNotifyDate.getMonth()]} ${lineNotifyYear}`;
-
   const pad = (n: number) => n.toString().padStart(2, '0');
   const drawDateIso = `${nextDrawDate.getFullYear()}-${pad(nextDrawDate.getMonth() + 1)}-${pad(nextDrawDate.getDate())}`;
   const autoPostDateIso = `${autoPostDate.getFullYear()}-${pad(autoPostDate.getMonth() + 1)}-${pad(autoPostDate.getDate())}`;
-  const lineNotifyDateIso = `${lineNotifyDate.getFullYear()}-${pad(lineNotifyDate.getMonth() + 1)}-${pad(lineNotifyDate.getDate())}`;
 
   return {
     drawDateStr,
@@ -762,11 +751,7 @@ export function getNextDrawInfo(referenceDate = new Date()): NextDrawInfo {
     autoPostDateIso,
     autoPostDateStr,
     daysUntilAutoPost,
-    isAutoPostDue: daysUntilAutoPost <= 0 && daysUntilDraw > 0,
-    lineNotifyDateIso,
-    lineNotifyDateStr,
-    daysUntilLineNotify,
-    isLineNotifyDue: daysUntilLineNotify <= 0 && daysUntilDraw >= 0
+    isAutoPostDue: daysUntilAutoPost <= 0 && daysUntilDraw > 0
   };
 }
 

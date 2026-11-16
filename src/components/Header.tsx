@@ -1,15 +1,14 @@
 import React from 'react';
 import { NextDrawInfo } from '../types/lottery';
-import { Sparkles, Calendar, Clock, Share2, BarChart2, Sliders, Bell, Send } from 'lucide-react';
+import { Sparkles, Calendar, Clock, Share2, BarChart2, Sliders, Send } from 'lucide-react';
 
-export type AppTab = 'dashboard' | 'analyzer' | 'linenotify' | 'telegram' | 'autopost' | 'statistics' | 'backtest';
+export type AppTab = 'dashboard' | 'analyzer' | 'telegram' | 'autopost' | 'statistics' | 'backtest';
 
 interface HeaderProps {
   nextDraw: NextDrawInfo;
   activeTab: AppTab;
   setActiveTab: (tab: AppTab) => void;
   isAutoPostEnabled: boolean;
-  isLineEnabled: boolean;
   isTelegramEnabled: boolean;
 }
 
@@ -18,7 +17,6 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
   isAutoPostEnabled,
-  isLineEnabled,
   isTelegramEnabled
 }) => {
   return (
@@ -41,17 +39,6 @@ export const Header: React.FC<HeaderProps> = ({
               <strong className="text-blue-300">{nextDraw.autoPostDateStr}</strong>
               <span className={isAutoPostEnabled ? 'text-emerald-400' : 'text-slate-500'}>
                 ({isAutoPostEnabled ? 'เปิด' : 'ปิด'})
-              </span>
-            </div>
-
-            <span aria-hidden="true" className="text-slate-700 hidden sm:inline">|</span>
-
-            <div className="flex items-center gap-1.5">
-              <Bell className="w-3.5 h-3.5 text-emerald-400" />
-              <span>แจ้งเตือน LINE (ก่อน 1 วัน):</span>
-              <strong className="text-emerald-300">{nextDraw.lineNotifyDateStr}</strong>
-              <span className={isLineEnabled ? 'text-emerald-400' : 'text-slate-500'}>
-                ({isLineEnabled ? 'เปิด' : 'ปิด'})
               </span>
             </div>
 
@@ -83,7 +70,7 @@ export const Header: React.FC<HeaderProps> = ({
               AI หวยแม่นยำ
             </h1>
             <p className="text-[11px] text-slate-400 whitespace-nowrap">
-              วิเคราะห์ 22 แหล่ง · ฟันธง 3 ตัวตรง & แจ้งเตือน LINE / TG / FB
+              วิเคราะห์ 22 แหล่ง · ฟันธง 3 ตัวตรง & ส่งกลุ่ม Telegram / FB
             </p>
           </div>
         </button>
@@ -112,18 +99,6 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Sliders className="w-4 h-4" />
             <span>วิเคราะห์ 22 แหล่ง</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('linenotify')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'linenotify'
-                ? 'bg-emerald-500 text-slate-950 font-semibold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Bell className={`w-4 h-4 ${activeTab === 'linenotify' ? 'text-slate-950' : 'text-emerald-400'}`} />
-            <span>แจ้งเตือน LINE</span>
           </button>
 
           <button
