@@ -10,6 +10,7 @@ interface HeaderProps {
   setActiveTab: (tab: AppTab) => void;
   isAutoPostEnabled: boolean;
   isTelegramEnabled: boolean;
+  lotteryShortName?: string;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -17,7 +18,8 @@ export const Header: React.FC<HeaderProps> = ({
   activeTab,
   setActiveTab,
   isAutoPostEnabled,
-  isTelegramEnabled
+  isTelegramEnabled,
+  lotteryShortName = 'รัฐบาล'
 }) => {
   return (
     <header className="border-b border-slate-800 bg-slate-900/85 backdrop-blur-md sticky top-0 z-40">
@@ -26,7 +28,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs tabular-nums">
           <div className="flex flex-wrap items-center gap-2 text-slate-300">
             <span>
-              งวดถัดไป: <strong className="text-amber-400">{nextDraw.drawDateStr}</strong> ({nextDraw.dayOfWeek})
+              งวดถัดไป ({lotteryShortName}): <strong className="text-amber-400">{nextDraw.drawDateStr}</strong> ({nextDraw.dayOfWeek})
             </span>
             <span aria-hidden="true" className="text-slate-600">·</span>
             <span className="text-amber-300 font-semibold">อีก {nextDraw.daysUntilDraw} วันหวยออก</span>

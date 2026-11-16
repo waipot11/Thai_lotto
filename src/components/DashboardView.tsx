@@ -74,7 +74,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const handleCopySummary = () => {
     const coreList = coreStraight.length > 0 ? coreStraight.map((c) => c.number).join(', ') : prediction.threeDigitsStraight.slice(0, 3).join(', ');
-    const text = `🎯 ฟันธง 3 ตัวตรงๆ งวด ${prediction.drawDate} (${prediction.dayOfWeek})\nสังเคราะห์ ${totalSources} แหล่ง · ฐานข้อมูลจริง ${totalRealDraws} งวด (${realAccuracyRate}%)\nเม็ดเดียว 3 ตัวตรง: ${megaShot}\n3 ตัวตรงเน้นหนัก: ${coreList}\nเด่นวิ่ง-รูด: ${prediction.topRunners.map((r) => r.digit).join(' - ')}\n2 ตัวบน: ${prediction.twoDigitsTop.slice(0, 4).join(', ')}\n2 ตัวล่าง: ${prediction.twoDigitsBottom.slice(0, 4).join(', ')}`;
+    const lotteryLabel = prediction.lotteryName || 'สลากกินแบ่งรัฐบาล';
+    const text = `🎯 ฟันธง 3 ตัวตรงๆ [${lotteryLabel}] งวด ${prediction.drawDate} (${prediction.dayOfWeek})\nสังเคราะห์ ${totalSources} แหล่ง · ฐานข้อมูลจริง ${totalRealDraws} งวด (${realAccuracyRate}%)\nเม็ดเดียว 3 ตัวตรง: ${megaShot}\n3 ตัวตรงเน้นหนัก: ${coreList}\nเด่นวิ่ง-รูด: ${prediction.topRunners.map((r) => r.digit).join(' - ')}\n2 ตัวบน: ${prediction.twoDigitsTop.slice(0, 4).join(', ')}\n2 ตัวล่าง: ${prediction.twoDigitsBottom.slice(0, 4).join(', ')}`;
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -123,9 +124,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 border-b border-slate-800 pb-6">
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2 text-xs text-emerald-400 font-medium">
+              <span className="text-amber-300 font-semibold">{prediction.lotteryName || 'สลากกินแบ่งรัฐบาล'}</span>
+              <span aria-hidden="true" className="text-slate-600">·</span>
               <span>สังเคราะห์ {totalSources} แหล่งข้อมูลเชิงลึก</span>
               <span aria-hidden="true">·</span>
-              <span>ฐานข้อมูลสลากจริง {totalRealDraws} งวด</span>
+              <span>ฐานข้อมูลจริง {totalRealDraws} งวด</span>
               <span aria-hidden="true">·</span>
               <span>ความแม่นยำสถิติ {realAccuracyRate}%</span>
             </div>

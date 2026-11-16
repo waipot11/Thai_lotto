@@ -18,23 +18,32 @@ import {
   Plus
 } from 'lucide-react';
 
+import { LotteryDraw, LotteryType } from '../types/lottery';
+import { LOTTERY_META_MAP } from '../data/specialLotteries';
+
 interface BacktestingViewProps {
   onOpenLiveDrawModal?: () => void;
   externalAccuracyReport?: ReturnType<typeof evaluateRealDatabaseAccuracy>;
+  draws?: LotteryDraw[];
+  lotteryType?: LotteryType;
 }
 
 export const BacktestingView: React.FC<BacktestingViewProps> = ({
   onOpenLiveDrawModal,
-  externalAccuracyReport
+  externalAccuracyReport,
+  draws = HISTORICAL_DRAWS,
+  lotteryType = 'gov'
 }) => {
   const [filterMode, setFilterMode] = useState<'all' | 'hit' | 'dual' | 'three' | 'miss'>('all');
   const [yearFilter, setYearFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  const lotteryMeta = LOTTERY_META_MAP[lotteryType] || LOTTERY_META_MAP.gov;
+
   // Dynamically compute real database accuracy across all actual historical draws
   const accuracyReport = useMemo(() => {
-    return externalAccuracyReport || evaluateRealDatabaseAccuracy(HISTORICAL_DRAWS);
-  }, [externalAccuracyReport]);
+    return externalAccuracyReport || evaluateRealDatabaseAccuracy(draws);
+  }, [externalAccuracyReport, draws]);
 
   // Filtered list
   const filteredResults = useMemo(() => {
@@ -71,15 +80,14 @@ export const BacktestingView: React.FC<BacktestingViewProps> = ({
 
         <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 border-b border-slate-800 pb-6">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold mb-3">
-              <Database className="w-3.5 h-3.5" />
-              การพิสูจน์ความแม่นยำจากฐานข้อมูลสลากกินแบ่งรัฐบาลจริง (Dual-Engine Real Database Audit)
+            <div className="text-xs text-emerald-400 font-semibold mb-2">
+              การพิสูจน์ความแม่นยำจากฐานข้อมูล{lotteryMeta.name} ({lotteryMeta.scheduleLabel})
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
-              ดัชนีความแม่นยำจากผลสลากจริง: <span className="text-emerald-400">{accuracyReport.overallRate}%</span>
+              ดัชนีความแม่นยำ ({lotteryMeta.shortName}): <span className="text-emerald-400">{accuracyReport.overallRate}%</span>
             </h2>
             <p className="text-slate-300 text-sm mt-1">
-              คำนวณสดจากฐานข้อมูลผลรางวัลจริง {accuracyReport.total} งวด • ยกระดับสูตรแยกบน-ล่าง และเจาะหลักร้อย 3 ตัวตรง
+              คำนวณสดจากฐานข้อมูลผลรางวัล {lotteryMeta.name} จำนวน {accuracyReport.total} งวด · สูตรแยกบน-ล่าง และเจาะหลักร้อย 3 ตัวตรง
             </p>
           </div>
 
@@ -224,6 +232,8 @@ export const BacktestingView: React.FC<BacktestingViewProps> = ({
               className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
             >
               <option value="all">ทุกปี พ.ศ.</option>
+              <option value="2569">ปี 2569</option>
+              <option value="2568">ปี 2568</option>
               <option value="2567">ปี 2567</option>
               <option value="2566">ปี 2566</option>
               <option value="2565">ปี 2565</option>

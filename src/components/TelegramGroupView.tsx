@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AIPredictionResult,
+  LotteryType,
   NextDrawInfo,
   TelegramConfig,
   TelegramDiscoveredChat,
   TelegramEnvStatus,
   TelegramLog
 } from '../types/lottery';
+import { LOTTERY_LIST, LOTTERY_META_MAP } from '../data/specialLotteries';
 import {
   Send,
   Calendar,
@@ -33,12 +35,14 @@ const TG_LOCAL_STORAGE_KEY = 'ai_lottery_telegram_config_v1';
 interface TelegramGroupViewProps {
   prediction: AIPredictionResult;
   nextDraw: NextDrawInfo;
+  allPredictions?: Record<LotteryType, AIPredictionResult>;
   onEnabledChange?: (enabled: boolean) => void;
 }
 
 export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
   prediction,
   nextDraw,
+  allPredictions,
   onEnabledChange
 }) => {
   const [config, setConfig] = useState<TelegramConfig>({
@@ -52,7 +56,8 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
     disableNotification: false,
     includeThreeStraight: true,
     includeTwoDigits: true,
-    includeRunners: true
+    includeRunners: true,
+    lotteryTypes: ['gov', 'baac', 'gsb']
   });
 
   const [useSimulatedMode, setUseSimulatedMode] = useState(true);
@@ -110,54 +115,92 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
     }
   };
 
-  // Generate Telegram-friendly VIP lottery alert message
+  // Generate Telegram-friendly VIP lottery alert message (supports รัฐบาล, ธ.ก.ส., ออมสิน)
+  const activeLotteryTypes: LotteryType[] =
+    config.lotteryTypes && config.lotteryTypes.length > 0 ? config.lotteryTypes : ['gov'];
+
   const generatedMessage = useMemo(() => {
-    const megaShot = prediction.sniperThreeStraight?.megaSingleShot || prediction.threeDigitsStraight?.[0] || '427';
-    const coreStraight = (
-      prediction.sniperThreeStraight?.coreStraightPicks?.map((p) => p.number) ||
-      prediction.threeDigitsStraight?.slice(0, 3) ||
-      [megaShot]
-    ).join(' · ');
-    const backupStraight = (
-      prediction.sniperThreeStraight?.backupStraightPicks?.map((p) => p.number) ||
-      prediction.threeDigitsStraight?.slice(3, 6) ||
-      []
-    ).join(' · ');
+    const formatLotterySection = (pred: AIPredictionResult, showHeaderPrefix: boolean) => {
+      const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight?.[0] || '427';
+      const coreStraight = (
+        pred.sniperThreeStraight?.coreStraightPicks?.map((p) => p.number) ||
+        pred.threeDigitsStraight?.slice(0, 3) ||
+        [megaShot]
+      ).join(' · ');
+      const backupStraight = (
+        pred.sniperThreeStraight?.backupStraightPicks?.map((p) => p.number) ||
+        pred.threeDigitsStraight?.slice(3, 6) ||
+        []
+      ).join(' · ');
+      const lotteryLabel = pred.lotteryName || LOTTERY_META_MAP[pred.lotteryType || 'gov'].name;
+
+      const secLines: string[] = [];
+      if (showHeaderPrefix) {
+        secLines.push(`📌 [${lotteryLabel}]`);
+      }
+      secLines.push(`🗓️ งวด ${pred.drawDate} (${pred.dayOfWeek})`);
+
+      if (config.includeThreeStraight) {
+        secLines.push(`👑 เม็ดเดียว 3 ตัวตรง ฟันธง: ${megaShot}`);
+        secLines.push(`🎯 3 ตัวตรงเน้นหนัก: ${coreStraight}`);
+        if (backupStraight && !showHeaderPrefix) {
+          secLines.push(`🛡️ กันพลาด 3 ตัว: ${backupStraight}`);
+        }
+      }
+
+      if (config.includeRunners) {
+        secLines.push(
+          `⚡ วิ่ง-รูดตัวเดียว: ${pred.topSection?.runningDigit || '2'} (รอง ${pred.topSection?.runningSub || '4'})`
+        );
+      }
+
+      if (config.includeTwoDigits) {
+        secLines.push(`💎 2 ตัวบน: ${(pred.twoDigitsTop || []).slice(0, 4).join(' - ')}`);
+        secLines.push(`🔹 2 ตัวล่าง: ${(pred.twoDigitsBottom || []).slice(0, 4).join(' - ')}`);
+      }
+
+      if (!showHeaderPrefix) {
+        secLines.push(`⚠️ ระวังเลขเบิ้ล: ${(pred.cautionDoubles || []).join(' - ')}`);
+      }
+
+      return secLines.join('\n');
+    };
+
     const totalSources = prediction.totalSourcesAnalyzed || prediction.multiSourceSummary?.length || 22;
 
-    const lines: string[] = [
-      `📣 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram`,
-      `🗓️ งวด ${prediction.drawDate} (${prediction.dayOfWeek})`,
-      `📊 สังเคราะห์ ${totalSources} แหล่ง · สถิติย้อนหลัง 10 ปี`
-    ];
-
-    if (config.includeThreeStraight) {
-      lines.push('');
-      lines.push(`👑 เม็ดเดียว 3 ตัวตรง ฟันธง: ${megaShot}`);
-      lines.push(`🎯 3 ตัวตรงเน้นหนัก: ${coreStraight}`);
-      if (backupStraight) {
-        lines.push(`🛡️ กันพลาด 3 ตัว: ${backupStraight}`);
-      }
-    }
-
-    if (config.includeRunners) {
-      lines.push('');
-      lines.push(
-        `⚡ วิ่ง-รูดตัวเดียว: ${prediction.topSection?.runningDigit || '2'} (รอง ${prediction.topSection?.runningSub || '4'})`
+    if (allPredictions && activeLotteryTypes.length > 1) {
+      const sections = activeLotteryTypes.map((t) =>
+        formatLotterySection(allPredictions[t] || prediction, true)
       );
+      return [
+        `📣 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram (ครบ ${activeLotteryTypes.length} หวย)`,
+        `📊 สังเคราะห์ ${totalSources} แหล่ง · สถิติย้อนหลัง`,
+        '',
+        sections.join('\n\n────────────────\n\n'),
+        '',
+        `✨ ขอให้สมาชิกในกลุ่มเฮงๆ ปังๆ ทุกท่านครับ!`
+      ].join('\n');
     }
 
-    if (config.includeTwoDigits) {
-      lines.push(`💎 2 ตัวบน: ${(prediction.twoDigitsTop || []).slice(0, 4).join(' - ')}`);
-      lines.push(`🔹 2 ตัวล่าง: ${(prediction.twoDigitsBottom || []).slice(0, 4).join(' - ')}`);
-    }
+    const targetPred =
+      allPredictions && activeLotteryTypes.length === 1
+        ? allPredictions[activeLotteryTypes[0]] || prediction
+        : prediction;
+    const targetName =
+      targetPred.lotteryName || LOTTERY_META_MAP[targetPred.lotteryType || 'gov'].name;
 
-    lines.push('');
-    lines.push(`⚠️ ระวังเลขเบิ้ล: ${(prediction.cautionDoubles || []).join(' - ')}`);
-    lines.push(`✨ ขอให้สมาชิกในกลุ่มเฮงๆ ปังๆ ทุกท่านครับ!`);
-    return lines.join('\n');
+    return [
+      `📣 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram [${targetName}]`,
+      `📊 สังเคราะห์ ${totalSources} แหล่ง · สถิติย้อนหลัง`,
+      '',
+      formatLotterySection(targetPred, false),
+      '',
+      `✨ ขอให้สมาชิกในกลุ่มเฮงๆ ปังๆ ทุกท่านครับ!`
+    ].join('\n');
   }, [
     prediction,
+    allPredictions,
+    activeLotteryTypes,
     config.includeThreeStraight,
     config.includeTwoDigits,
     config.includeRunners
@@ -858,6 +901,42 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
                 {copiedMsg ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                 <span>{copiedMsg ? 'คัดลอกแล้ว' : 'คัดลอกข้อความ'}</span>
               </button>
+            </div>
+
+            {/* Lottery Types Selection for Telegram Group */}
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-slate-300">
+                เลือกประเภทหวยที่จะส่งเข้ากลุ่ม (ส่งรวมกันทีเดียวหรือเลือกเฉพาะหวยก็ได้):
+              </div>
+              <div className="flex flex-wrap gap-2.5 text-xs">
+                {LOTTERY_LIST.map((lot) => {
+                  const isChecked = activeLotteryTypes.includes(lot.id);
+                  return (
+                    <label
+                      key={lot.id}
+                      className={`flex items-center gap-2 border px-3 py-1.5 rounded-lg cursor-pointer transition-colors ${
+                        isChecked
+                          ? 'bg-sky-500/15 border-sky-500/50 text-sky-200 font-semibold'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) => {
+                          const next = e.target.checked
+                            ? Array.from(new Set([...activeLotteryTypes, lot.id]))
+                            : activeLotteryTypes.filter((id) => id !== lot.id);
+                          if (next.length === 0) return; // Require at least 1 lottery selected
+                          handleSaveConfig({ lotteryTypes: next });
+                        }}
+                        className="accent-sky-500"
+                      />
+                      <span>{lot.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="flex flex-wrap gap-3 text-xs">

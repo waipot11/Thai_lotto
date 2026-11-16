@@ -1,5 +1,17 @@
+export type LotteryType = 'gov' | 'baac' | 'gsb';
+
+export interface LotteryMeta {
+  id: LotteryType;
+  name: string;
+  shortName: string;
+  scheduleLabel: string;
+  prizeFormatLabel: string;
+  accentColor: 'amber' | 'emerald' | 'pink';
+}
+
 export interface LotteryDraw {
   id: string;
+  lotteryType?: LotteryType;
   drawDate: string; // e.g. "16 ตุลาคม 2569"
   dateIso: string; // "2026-10-16"
   dayOfWeek: string; // "วันศุกร์"
@@ -81,6 +93,8 @@ export interface SniperThreeStraightFocus {
 }
 
 export interface AIPredictionResult {
+  lotteryType?: LotteryType;
+  lotteryName?: string;
   drawDate: string;
   drawDateIso: string;
   dayOfWeek: string;
@@ -184,6 +198,7 @@ export interface TelegramConfig {
   includeThreeStraight: boolean;
   includeTwoDigits: boolean;
   includeRunners: boolean;
+  lotteryTypes?: LotteryType[];
   lastNotifiedDraw?: string;
 }
 
@@ -213,6 +228,8 @@ export interface TelegramLog {
 }
 
 export interface NextDrawInfo {
+  lotteryType?: LotteryType;
+  lotteryName?: string;
   drawDateStr: string;
   drawDateIso: string;
   dayOfWeek: string;

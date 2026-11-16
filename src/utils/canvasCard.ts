@@ -34,11 +34,13 @@ export function renderLotteryCardToCanvas(
   const sniper = prediction.sniperThreeStraight;
   const megaShot = sniper?.megaSingleShot || prediction.topSection?.threeDigitsStraight?.[0] || '427';
 
+  const lotteryLabel = prediction.lotteryName || 'สลากกินแบ่งรัฐบาล';
+
   // Top Title Banner
   ctx.fillStyle = '#eab308';
   ctx.textAlign = 'center';
-  ctx.font = 'bold 34px "Prompt", sans-serif';
-  ctx.fillText('👑 ฟันธง 3 ตัวตรงๆ เน้นๆ · AI วิเคราะห์เชิงลึก 👑', width / 2, 92);
+  ctx.font = 'bold 32px "Prompt", sans-serif';
+  ctx.fillText(`👑 ฟันธง 3 ตัวตรงๆ · ${lotteryLabel} 👑`, width / 2, 92);
 
   // Draw Date subtitle
   ctx.fillStyle = '#f8fafc';
@@ -48,7 +50,7 @@ export function renderLotteryCardToCanvas(
   ctx.fillStyle = '#94a3b8';
   ctx.font = '23px "Prompt", sans-serif';
   ctx.fillText(
-    `(${prediction.dayOfWeek}) · สังเคราะห์ ${totalSources} แหล่งข้อมูล & สถิติสลากจริง 10 ปี`,
+    `(${prediction.dayOfWeek}) · สังเคราะห์ ${totalSources} แหล่งข้อมูล & สถิติย้อนหลัง`,
     width / 2,
     186
   );

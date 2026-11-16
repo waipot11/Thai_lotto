@@ -2,19 +2,25 @@ import React, { useState } from 'react';
 import { THAI_DAY_NAMES, THAI_MONTH_NAMES } from '../data/lotteryHistory';
 import { Plus, X, Sparkles, RefreshCw, CheckCircle2, Database, Zap } from 'lucide-react';
 
+import { LotteryType } from '../types/lottery';
+import { LOTTERY_META_MAP } from '../data/specialLotteries';
+
 interface LiveDrawModalProps {
   isOpen: boolean;
   onClose: () => void;
   onDrawAdded: (newAccuracyRate: number, totalDraws: number) => void;
   currentAccuracyRate: number;
+  lotteryType?: LotteryType;
 }
 
 export const LiveDrawModal: React.FC<LiveDrawModalProps> = ({
   isOpen,
   onClose,
   onDrawAdded,
-  currentAccuracyRate
+  currentAccuracyRate,
+  lotteryType = 'gov'
 }) => {
+  const lotteryMeta = LOTTERY_META_MAP[lotteryType] || LOTTERY_META_MAP.gov;
   const [drawDate, setDrawDate] = useState('16 ตุลาคม 2569');
   const [dayOfWeek, setDayOfWeek] = useState('วันศุกร์');
   const [firstPrize, setFirstPrize] = useState('');
@@ -49,6 +55,7 @@ export const LiveDrawModal: React.FC<LiveDrawModalProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          lotteryType,
           drawDate,
           dayOfWeek,
           firstPrize,
@@ -87,10 +94,10 @@ export const LiveDrawModal: React.FC<LiveDrawModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                บันทึกผลสลากงวดใหม่ (Real-Time Live Update)
+                บันทึกผล{lotteryMeta.name}งวดใหม่
               </h3>
               <p className="text-[11px] text-slate-400">
-                เมื่อบันทึกผล ดัชนีความแม่นยำจะคำนวณใหม่แบบ Real-Time ทันที
+                เมื่อบันทึกผล ดัชนีความแม่นยำของ{lotteryMeta.shortName}จะคำนวณใหม่ทันที
               </p>
             </div>
           </div>

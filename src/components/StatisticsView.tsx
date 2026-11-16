@@ -12,14 +12,26 @@ import {
   Percent
 } from 'lucide-react';
 
-export const StatisticsView: React.FC = () => {
+import { LotteryDraw, LotteryType } from '../types/lottery';
+import { LOTTERY_META_MAP } from '../data/specialLotteries';
+
+interface StatisticsViewProps {
+  draws?: LotteryDraw[];
+  lotteryType?: LotteryType;
+}
+
+export const StatisticsView: React.FC<StatisticsViewProps> = ({
+  draws = HISTORICAL_DRAWS,
+  lotteryType = 'gov'
+}) => {
   const [selectedDayFilter, setSelectedDayFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  const stats = calculateDigitStats(HISTORICAL_DRAWS);
+  const lotteryMeta = LOTTERY_META_MAP[lotteryType] || LOTTERY_META_MAP.gov;
+  const stats = calculateDigitStats(draws);
 
   // Filter draws
-  const filteredDraws = HISTORICAL_DRAWS.filter((draw) => {
+  const filteredDraws = draws.filter((draw) => {
     const matchesDay = selectedDayFilter === 'all' || draw.dayOfWeek === selectedDayFilter;
     const matchesQuery =
       !searchQuery ||
@@ -36,15 +48,14 @@ export const StatisticsView: React.FC = () => {
     <div className="space-y-6">
       {/* Stat Header */}
       <div className="rounded-3xl bg-slate-900/80 border border-slate-800 p-6 sm:p-8">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 text-xs font-semibold mb-3">
-          <BarChart2 className="w-3.5 h-3.5" />
-          ฐานข้อมูลสถิติสลากกินแบ่งรัฐบาล (Statistical Big Data Engine)
+        <div className="text-xs text-amber-400 font-semibold mb-2">
+          ฐานข้อมูลสถิติ{lotteryMeta.name} · {lotteryMeta.scheduleLabel}
         </div>
         <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
-          สถิติย้อนหลัง & ความถี่ตัวเลข 0 - 9
+          สถิติย้อนหลัง & ความถี่ตัวเลข 0 - 9 ({lotteryMeta.shortName})
         </h2>
         <p className="text-slate-400 text-sm mt-1">
-          วิเคราะห์ความถี่ การกระจายตัว และแนวโน้มสถิติย้อนหลังเพื่อใช้เป็นข้อมูลอ้างอิงให้ AI
+          วิเคราะห์ความถี่ การกระจายตัว และแนวโน้มสถิติย้อนหลังของ{lotteryMeta.name}เพื่อใช้เป็นข้อมูลอ้างอิงให้ AI
         </p>
 
         {/* Quick Highlights KPI */}
@@ -192,7 +203,7 @@ export const StatisticsView: React.FC = () => {
           <div>
             <h3 className="text-base font-bold text-white flex items-center gap-2">
               <Calendar className="w-4 h-4 text-amber-400" />
-              ตารางผลสลากกินแบ่งรัฐบาลย้อนหลัง
+              ตารางผล{lotteryMeta.name}ย้อนหลัง
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
               ค้นหาและตรวจเช็กผลรางวัลย้อนหลังแต่ละงวด

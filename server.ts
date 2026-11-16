@@ -8,9 +8,15 @@ import {
   HISTORICAL_DRAWS,
   evaluateRealDatabaseAccuracy,
   generateDynamicLotteryPrediction,
+  getHistoricalDrawsByType,
   getNextDrawInfo
 } from './src/data/lotteryHistory.ts';
+import {
+  LOTTERY_META_MAP,
+  getNextDrawInfoByType
+} from './src/data/specialLotteries.ts';
 import { getSourcesForDayOfWeek } from './src/data/sourcesData.ts';
+import { LotteryType } from './src/types/lottery.ts';
 
 dotenv.config();
 
@@ -87,6 +93,7 @@ let telegramConfig = {
   includeThreeStraight: true,
   includeTwoDigits: true,
   includeRunners: true,
+  lotteryTypes: ['gov', 'baac', 'gsb'] as LotteryType[],
   lastNotifiedDraw: ''
 };
 
@@ -167,19 +174,30 @@ function savePersistedStore() {
 loadPersistedStore();
 
 // Helper to generate algorithmic synthesis using all enabled sources & real positional stats
-function generateAlgorithmicFallback(drawDate: string, dayOfWeek: string, sources: any[] = []) {
+function generateAlgorithmicFallback(
+  drawDate: string,
+  dayOfWeek: string,
+  sources: any[] = [],
+  lotteryType: LotteryType = 'gov'
+) {
   return generateDynamicLotteryPrediction(
     drawDate,
     dayOfWeek,
     new Date().toISOString().split('T')[0],
-    Array.isArray(sources) && sources.length > 0 ? sources : undefined
+    Array.isArray(sources) && sources.length > 0 ? sources : undefined,
+    lotteryType,
+    liveDraws
   );
 }
 
 // API: Analyze lottery with Gemini 4 Hydrogen (22 Sources + Positional 3-Digit Straight Focus)
 app.post('/api/analyze-lottery', async (req: Request, res: Response) => {
   try {
-    const { drawDate, dayOfWeek, sources, customNotes } = req.body;
+    const { drawDate, dayOfWeek, sources, customNotes, lotteryType } = req.body;
+    const safeLotteryType: LotteryType =
+      lotteryType === 'baac' || lotteryType === 'gsb' ? lotteryType : 'gov';
+    const lotteryMeta = LOTTERY_META_MAP[safeLotteryType];
+
     const enabledSources =
       Array.isArray(sources) && sources.length > 0
         ? sources.filter((s: any) => s.enabled)
@@ -189,7 +207,9 @@ app.post('/api/analyze-lottery', async (req: Request, res: Response) => {
       drawDate,
       dayOfWeek,
       new Date().toISOString().split('T')[0],
-      enabledSources
+      enabledSources,
+      safeLotteryType,
+      liveDraws
     );
 
     const sourcesSummaryText = enabledSources
@@ -200,23 +220,23 @@ app.post('/api/analyze-lottery', async (req: Request, res: Response) => {
       .join('\n');
 
     const positionalContext = baseline.granularStats
-      ? `สถิติเจาะทีละตำแหน่งจากฐานข้อมูลจริง (${baseline.granularStats.threeDigitStructure.historicalCohortSummary}):
+      ? `สถิติเจาะทีละตำแหน่งจากฐานข้อมูล${lotteryMeta.name} (${baseline.granularStats.threeDigitStructure.historicalCohortSummary}):
 - หลักร้อยตัวเต็ง: ${baseline.granularStats.hundredAnalysis.map((c) => `${c.digit} (${c.probability}%)`).join(', ')}
 - หลักสิบบนตัวเต็ง: ${baseline.granularStats.tenAnalysis.map((c) => `${c.digit} (${c.probability}%)`).join(', ')}
 - หลักหน่วยบนตัวเต็ง: ${baseline.granularStats.unitAnalysis.map((c) => `${c.digit} (${c.probability}%)`).join(', ')}
 - เลขดับ/ตัดคู่ซ้ำที่คัดทิ้ง: ${baseline.granularStats.eliminatedDigits.map((e) => `${e.digitOrPair} (${e.reason})`).join(' | ')}`
       : '';
 
-    const systemPrompt = `คุณคือระบบ AI ผู้เชี่ยวชาญด้านการวิเคราะห์ความน่าจะเป็นและสถิติสลากกินแบ่งรัฐบาลไทยระดับสูง (Thai Government Lottery Deep AI Analyzer).
-หน้าที่ของคุณคือสังเคราะห์ข้อมูลจาก ${enabledSources.length} แหล่งข้อมูลและโมเดลสถิติย้อนหลัง 10 ปี เพื่อฟันธง **"เลข 3 ตัวตรงๆ เน้นๆ"** แบบเจาะทีละตำแหน่ง (หลักร้อย -> หลักสิบ -> หลักหน่วย) สำหรับงวดที่ออกตรงกับ "${dayOfWeek}".
+    const systemPrompt = `คุณคือระบบ AI ผู้เชี่ยวชาญด้านการวิเคราะห์ความน่าจะเป็นและสถิติ "${lotteryMeta.name}" (${lotteryMeta.scheduleLabel}).
+หน้าที่ของคุณคือสังเคราะห์ข้อมูลจาก ${enabledSources.length} แหล่งข้อมูลและโมเดลสถิติย้อนหลัง เพื่อฟันธง **"เลข 3 ตัวตรงๆ เน้นๆ"** แบบเจาะทีละตำแหน่ง (หลักร้อย -> หลักสิบ -> หลักหน่วย) สำหรับงวดที่ออกตรงกับ "${dayOfWeek}".
 
 กฎสำคัญ:
-1. วันในสัปดาห์ของงวดนี้คือ "${dayOfWeek}" ซึ่งมีเลขกำลังวันและสถิติความถี่เฉพาะตัว ห้ามนำตัวเลขของงวดวันอื่นมาใช้ซ้ำ!
+1. ประเภทสลากที่วิเคราะห์คือ "${lotteryMeta.name}" (${lotteryMeta.prizeFormatLabel}) และวันในสัปดาห์คือ "${dayOfWeek}" ห้ามนำเลขของงวดอื่นหรือประเภทอื่นมาใช้ซ้ำ!
 2. ต้องฟันธง **"เม็ดเดียว 3 ตัวตรง (megaSingleShot)"** 1 ชุดที่มั่นใจสูงสุด พร้อม **"ชุด 3 ตัวตรงเน้นหนัก 3 ชุดหลัก"** และเหตุผลเจาะทีละหลัก (หลักร้อย / หลักสิบ / หลักหน่วย)
 3. ต้องเคารพตัวกรองเลขดับและคู่ซ้ำจากงวดล่าสุด เพื่อตัดเลขโอกาสต่ำออกให้หมด
-4. ร่างบทวิเคราะห์เชิงลึกภาษาไทยที่อ้างอิงทั้งหลักร้อย-สิบ-หน่วย แต้มรวม 3 ตัว และข้อความโพสต์ Facebook ที่ชู 3 ตัวตรงๆ ฟันธงอย่างโดดเด่น`;
+4. ร่างบทวิเคราะห์เชิงลึกภาษาไทยที่อ้างอิงทั้งหลักร้อย-สิบ-หน่วย แต้มรวม 3 ตัว และข้อความโพสต์ Facebook ที่ชูชื่อ "${lotteryMeta.name}" และ 3 ตัวตรงๆ ฟันธงอย่างโดดเด่น`;
 
-    const userPrompt = `กรุณาวิเคราะห์และวางเลขเด็ดฟันธงเน้นๆ แบบ 3 ตัวตรงๆ สำหรับงวดวันที่: ${drawDate} (ตรงกับ ${dayOfWeek})
+    const userPrompt = `กรุณาวิเคราะห์และวางเลขเด็ดฟันธงเน้นๆ แบบ 3 ตัวตรงๆ สำหรับ [${lotteryMeta.name}] งวดวันที่: ${drawDate} (ตรงกับ ${dayOfWeek})
 
 ${positionalContext}
 
@@ -227,7 +247,11 @@ ${customNotes ? `\nบันทึก/เบาะแสเพิ่มเติ
 กรุณาส่งผลลัพธ์กลับมาเป็น JSON ที่สมบูรณ์ตาม schema โดยเน้นความเฉียบคมของชุด 3 ตัวตรงๆ เป็นหลัก`;
 
     try {
-      const response = await ai.models.generateContent({
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error('GEMINI_API_KEY not configured');
+      }
+
+      const geminiPromise = ai.models.generateContent({
         model: 'gemini-4-hydrogen',
         contents: userPrompt,
         config: {
@@ -318,6 +342,13 @@ ${customNotes ? `\nบันทึก/เบาะแสเพิ่มเติ
         }
       });
 
+      const response = await Promise.race([
+        geminiPromise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Gemini API timeout after 10s')), 10000)
+        )
+      ]);
+
       const parsed = JSON.parse(response.text || '{}');
       const straightList: string[] =
         Array.isArray(parsed.threeDigitsStraight) && parsed.threeDigitsStraight.length >= 3
@@ -366,6 +397,8 @@ ${customNotes ? `\nบันทึก/เบาะแสเพิ่มเติ
       const mergedResult = {
         ...baseline,
         ...parsed,
+        lotteryType: safeLotteryType,
+        lotteryName: lotteryMeta.name,
         drawDate,
         dayOfWeek,
         totalSourcesAnalyzed: enabledSources.length,
@@ -410,7 +443,7 @@ ${customNotes ? `\nบันทึก/เบาะแสเพิ่มเติ
       return res.json({ success: true, data: mergedResult, engine: 'gemini-4-hydrogen' });
     } catch (geminiError: any) {
       console.warn('Gemini API call failed, using high-precision fallback engine:', geminiError?.message);
-      const fallbackData = generateAlgorithmicFallback(drawDate, dayOfWeek, enabledSources);
+      const fallbackData = generateAlgorithmicFallback(drawDate, dayOfWeek, enabledSources, safeLotteryType);
       return res.json({ success: true, data: fallbackData, engine: 'statistical-fallback', note: geminiError?.message });
     }
   } catch (error: any) {
@@ -839,12 +872,16 @@ app.post('/api/telegram/send', async (req: Request, res: Response) => {
   }
 });
 
-// API: Get live draws and real-time computed accuracy
+// API: Get live draws and real-time computed accuracy (supports ?lotteryType=gov|baac|gsb)
 app.get('/api/lottery/draws', (req: Request, res: Response) => {
-  const accuracy = evaluateRealDatabaseAccuracy(liveDraws);
+  const rawType = String(req.query.lotteryType || 'gov');
+  const safeType: LotteryType = rawType === 'baac' || rawType === 'gsb' ? rawType : 'gov';
+  const drawsForType = getHistoricalDrawsByType(safeType, liveDraws);
+  const accuracy = evaluateRealDatabaseAccuracy(drawsForType);
   res.json({
     success: true,
-    draws: liveDraws,
+    lotteryType: safeType,
+    draws: drawsForType,
     accuracy
   });
 });
@@ -852,13 +889,15 @@ app.get('/api/lottery/draws', (req: Request, res: Response) => {
 // API: Record new draw result in Real-Time & immediately re-evaluate accuracy
 app.post('/api/lottery/add-draw', (req: Request, res: Response) => {
   try {
-    const { drawDate, dateIso, dayOfWeek, firstPrize, last2Digits, first3Digits, last3Digits } = req.body;
+    const { drawDate, dateIso, dayOfWeek, firstPrize, last2Digits, first3Digits, last3Digits, lotteryType } = req.body;
+    const safeType: LotteryType = lotteryType === 'baac' || lotteryType === 'gsb' ? lotteryType : 'gov';
     if (!drawDate || !firstPrize || !last2Digits) {
       return res.status(400).json({ success: false, error: 'กรุณากรอกข้อมูลงวด, รางวัลที่ 1 และเลขท้าย 2 ตัว' });
     }
 
     const newDraw = {
-      id: `${dateIso || 'draw'}-${Date.now()}`,
+      id: `${safeType}-${dateIso || 'draw'}-${Date.now()}`,
+      lotteryType: safeType,
       drawDate,
       dateIso: dateIso || new Date().toISOString().split('T')[0],
       dayOfWeek: dayOfWeek || 'วันศุกร์',
@@ -872,15 +911,16 @@ app.post('/api/lottery/add-draw', (req: Request, res: Response) => {
     liveDraws = [newDraw, ...liveDraws];
     savePersistedStore();
 
-    // Immediately recalculate accuracy
-    const updatedAccuracy = evaluateRealDatabaseAccuracy(liveDraws);
+    const drawsForType = getHistoricalDrawsByType(safeType, liveDraws);
+    const updatedAccuracy = evaluateRealDatabaseAccuracy(drawsForType);
 
     res.json({
       success: true,
+      lotteryType: safeType,
       data: newDraw,
       accuracy: updatedAccuracy,
-      totalDraws: liveDraws.length,
-      message: `บันทึกผลสลากงวด ${drawDate} สำเร็จ! คำนวณความแม่นยำใหม่ทันที: ${updatedAccuracy.overallRate}%`
+      totalDraws: drawsForType.length,
+      message: `บันทึกผล${LOTTERY_META_MAP[safeType].shortName} งวด ${drawDate} สำเร็จ! คำนวณความแม่นยำใหม่ทันที: ${updatedAccuracy.overallRate}%`
     });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
@@ -890,13 +930,16 @@ app.post('/api/lottery/add-draw', (req: Request, res: Response) => {
 // API: Delete a draw
 app.delete('/api/lottery/draws/:id', (req: Request, res: Response) => {
   const { id } = req.params;
+  const rawType = String(req.query.lotteryType || 'gov');
+  const safeType: LotteryType = rawType === 'baac' || rawType === 'gsb' ? rawType : 'gov';
   liveDraws = liveDraws.filter((d) => d.id !== id);
   savePersistedStore();
-  const updatedAccuracy = evaluateRealDatabaseAccuracy(liveDraws);
+  const drawsForType = getHistoricalDrawsByType(safeType, liveDraws);
+  const updatedAccuracy = evaluateRealDatabaseAccuracy(drawsForType);
   res.json({
     success: true,
     accuracy: updatedAccuracy,
-    totalDraws: liveDraws.length
+    totalDraws: drawsForType.length
   });
 });
 
@@ -907,21 +950,31 @@ function getBangkokNow(): Date {
   return new Date(bangkokMs);
 }
 
-// Run a single check & send pre-draw Telegram group alert if due
+// Run a single check & send pre-draw Telegram group alert if due (supports รัฐบาล, ธ.ก.ส., ออมสิน)
 async function runTelegramPreDrawTick(): Promise<{ ok: boolean; status: string; drawDate: string }> {
   const now = getBangkokNow();
-  const nextDraw = getNextDrawInfo(now);
+  const nextGov = getNextDrawInfo(now);
 
   if (!telegramConfig.isTelegramEnabled) {
-    return { ok: true, status: 'disabled', drawDate: nextDraw.drawDateIso };
+    return { ok: true, status: 'disabled', drawDate: nextGov.drawDateIso };
   }
 
-  const daysUntilTargetAlert = nextDraw.daysUntilDraw - (telegramConfig.daysBeforeDraw || 1);
-  if (telegramConfig.lastNotifiedDraw === nextDraw.drawDateIso) {
-    return { ok: true, status: 'already_sent', drawDate: nextDraw.drawDateIso };
+  const targetTypes: LotteryType[] =
+    Array.isArray(telegramConfig.lotteryTypes) && telegramConfig.lotteryTypes.length > 0
+      ? telegramConfig.lotteryTypes
+      : ['gov', 'baac', 'gsb'];
+
+  const dueDraws = targetTypes
+    .map((t) => ({ type: t, info: getNextDrawInfoByType(t, now) }))
+    .filter(({ info }) => info.daysUntilDraw - (telegramConfig.daysBeforeDraw || 1) <= 0);
+
+  if (dueDraws.length === 0) {
+    return { ok: true, status: 'not_due_yet', drawDate: nextGov.drawDateIso };
   }
-  if (daysUntilTargetAlert > 0) {
-    return { ok: true, status: 'not_due_yet', drawDate: nextDraw.drawDateIso };
+
+  const batchKey = dueDraws.map((d) => `${d.type}:${d.info.drawDateIso}`).join('|');
+  if (telegramConfig.lastNotifiedDraw === batchKey || telegramConfig.lastNotifiedDraw === dueDraws[0].info.drawDateIso) {
+    return { ok: true, status: 'already_sent', drawDate: dueDraws[0].info.drawDateIso };
   }
 
   const [targetHour, targetMin] = (telegramConfig.notifyTime || '08:30').split(':').map(Number);
@@ -929,7 +982,7 @@ async function runTelegramPreDrawTick(): Promise<{ ok: boolean; status: string; 
   const scheduledMinutes = (targetHour || 8) * 60 + (targetMin || 30);
 
   if (currentMinutes < scheduledMinutes) {
-    return { ok: true, status: 'waiting_notify_time', drawDate: nextDraw.drawDateIso };
+    return { ok: true, status: 'waiting_notify_time', drawDate: dueDraws[0].info.drawDateIso };
   }
 
   const envSecrets = getTelegramEnvSecrets();
@@ -937,30 +990,33 @@ async function runTelegramPreDrawTick(): Promise<{ ok: boolean; status: string; 
   const effectiveChatId = (telegramConfig.chatId || '').trim() || envSecrets.chatId;
 
   if (!effectiveToken || !effectiveChatId) {
-    return { ok: true, status: 'missing_credentials', drawDate: nextDraw.drawDateIso };
+    return { ok: true, status: 'missing_credentials', drawDate: dueDraws[0].info.drawDateIso };
   }
 
-  const pred = generateDynamicLotteryPrediction(nextDraw.drawDateStr, nextDraw.dayOfWeek, nextDraw.drawDateIso);
-  const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight[0];
-  const coreStraight = pred.sniperThreeStraight?.coreStraightPicks.map((p) => p.number).join(' · ') || pred.threeDigitsStraight.slice(0, 3).join(' · ');
+  const sections = dueDraws.map(({ type, info }) => {
+    const pred = generateDynamicLotteryPrediction(info.drawDateStr, info.dayOfWeek, info.drawDateIso, undefined, type, liveDraws);
+    const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight[0];
+    const coreStraight = pred.sniperThreeStraight?.coreStraightPicks.map((p) => p.number).join(' · ') || pred.threeDigitsStraight.slice(0, 3).join(' · ');
+    return `📌 [${LOTTERY_META_MAP[type].name}]\n🗓️ งวด ${info.drawDateStr} (${info.dayOfWeek})\n👑 เม็ดเดียว 3 ตัวตรง: ${megaShot}\n🎯 3 ตัวเน้นหนัก: ${coreStraight}\n⚡ วิ่ง-รูด: ${pred.topSection.runningDigit} (รอง ${pred.topSection.runningSub})\n💎 2 ตัวบน: ${pred.twoDigitsTop.slice(0, 4).join(', ')} | ล่าง: ${pred.twoDigitsBottom.slice(0, 4).join(', ')}`;
+  });
 
-  const autoMsg = `🔔 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram (ก่อนหวยออก ${telegramConfig.daysBeforeDraw} วัน)\nงวด ${nextDraw.drawDateStr} (${nextDraw.dayOfWeek})\n\n👑 เม็ดเดียว 3 ตัวตรง ฟันธง: ${megaShot}\n🎯 3 ตัวตรงเน้นหนัก: ${coreStraight}\n⚡ วิ่ง-รูด: ${pred.topSection.runningDigit} (รอง ${pred.topSection.runningSub})\n💎 2 ตัวบน: ${pred.twoDigitsTop.slice(0, 4).join(', ')} | ล่าง: ${pred.twoDigitsBottom.slice(0, 4).join(', ')}`;
+  const autoMsg = `🔔 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram (ก่อนหวยออก ${telegramConfig.daysBeforeDraw} วัน)\n\n${sections.join('\n\n────────────────\n\n')}`;
 
   await dispatchTelegramMessage({
     botToken: effectiveToken,
     chatId: effectiveChatId,
     messageThreadId: telegramConfig.messageThreadId,
     message: autoMsg,
-    drawDate: nextDraw.drawDateStr,
+    drawDate: dueDraws.map((d) => `${LOTTERY_META_MAP[d.type].shortName} ${d.info.drawDateStr}`).join(' / '),
     pinMessage: telegramConfig.pinMessage,
     disableNotification: telegramConfig.disableNotification,
     isSimulated: false
   });
 
-  telegramConfig.lastNotifiedDraw = nextDraw.drawDateIso;
+  telegramConfig.lastNotifiedDraw = batchKey;
   savePersistedStore();
-  console.log(`[Telegram Scheduler] Sent pre-draw group alert for ${nextDraw.drawDateStr}`);
-  return { ok: true, status: 'sent', drawDate: nextDraw.drawDateIso };
+  console.log(`[Telegram Scheduler] Sent pre-draw group alert for ${batchKey}`);
+  return { ok: true, status: 'sent', drawDate: dueDraws[0].info.drawDateIso };
 }
 
 // Lightweight HTTP cron endpoints for cron-job.org (tiny JSON response < 100 bytes)
