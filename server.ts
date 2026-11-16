@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import {
   HISTORICAL_DRAWS,
+  buildWin4Strategy,
   evaluateRealDatabaseAccuracy,
   generateDynamicLotteryPrediction,
   getHistoricalDrawsByType,
@@ -394,6 +395,18 @@ ${customNotes ? `\nบันทึก/เบาะแสเพิ่มเติ
         reason: `ชุดกันพลาดตำแหน่งหลักร้อย-สิบ-หน่วย`
       }));
 
+      const win4Strategy = buildWin4Strategy(
+        [
+          hundreds[0] || megaShot[0],
+          topRunnersList[0] || megaShot[1],
+          topRunnersList[1] || megaShot[2],
+          topRunnersList[2] || baseline.topRunners[2]?.digit || '8',
+          ...(baseline.win4Strategy?.digits || [])
+        ],
+        hundreds,
+        `แผนลงทุนวิน 4 ตัว [${lotteryMeta.name}] คัดจาก 4 แกนหลักที่ชนสถิติและ AI สูงสุด`
+      );
+
       const mergedResult = {
         ...baseline,
         ...parsed,
@@ -402,7 +415,8 @@ ${customNotes ? `\nบันทึก/เบาะแสเพิ่มเติ
         drawDate,
         dayOfWeek,
         totalSourcesAnalyzed: enabledSources.length,
-        threeDigitsStraight: orderedStraight,
+        win4Strategy,
+        threeDigitsStraight: win4Strategy.threeDigitStraightFocus,
         topSection: {
           ...baseline.topSection,
           runningDigit: topRunnersList[0] || baseline.topSection.runningDigit,
@@ -410,9 +424,9 @@ ${customNotes ? `\nบันทึก/เบาะแสเพิ่มเติ
           hundredDigits: hundreds,
           tenDigits: [megaShot[1] || topRunnersList[0], topRunnersList[1] || baseline.topSection.tenDigits[1]],
           unitDigits: [megaShot[2] || topRunnersList[1], topRunnersList[2] || baseline.topSection.unitDigits[1]],
-          twoDigitsTop: Array.isArray(parsed.twoDigitsTop) && parsed.twoDigitsTop.length > 0 ? parsed.twoDigitsTop : baseline.twoDigitsTop,
-          threeDigitsStraight: orderedStraight,
-          threeDigitsToad: Array.isArray(parsed.threeDigitsToad) && parsed.threeDigitsToad.length > 0 ? parsed.threeDigitsToad : baseline.threeDigitsToad
+          twoDigitsTop: win4Strategy.twoDigitNoDouble.slice(0, 8),
+          threeDigitsStraight: win4Strategy.threeDigitStraightFocus,
+          threeDigitsToad: win4Strategy.threeDigitToad
         },
         bottomSection: {
           ...baseline.bottomSection,
@@ -995,9 +1009,12 @@ async function runTelegramPreDrawTick(): Promise<{ ok: boolean; status: string; 
 
   const sections = dueDraws.map(({ type, info }) => {
     const pred = generateDynamicLotteryPrediction(info.drawDateStr, info.dayOfWeek, info.drawDateIso, undefined, type, liveDraws);
+    const win4 = pred.win4Strategy;
+    const coreWinDigits = win4 ? win4.digits.join(' - ') : pred.luckyDayPlanetaryNumbers.slice(0, 4).join(' - ');
+    const win2Sets = win4 ? win4.twoDigitNoDouble.join(' · ') : pred.twoDigitsTop.slice(0, 8).join(' · ');
+    const win3Toad = win4 ? win4.threeDigitToad.join(' · ') : pred.threeDigitsToad.slice(0, 4).join(' · ');
     const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight[0];
-    const coreStraight = pred.sniperThreeStraight?.coreStraightPicks.map((p) => p.number).join(' · ') || pred.threeDigitsStraight.slice(0, 3).join(' · ');
-    return `📌 [${LOTTERY_META_MAP[type].name}]\n🗓️ งวด ${info.drawDateStr} (${info.dayOfWeek})\n👑 เม็ดเดียว 3 ตัวตรง: ${megaShot}\n🎯 3 ตัวเน้นหนัก: ${coreStraight}\n⚡ วิ่ง-รูด: ${pred.topSection.runningDigit} (รอง ${pred.topSection.runningSub})\n💎 2 ตัวบน: ${pred.twoDigitsTop.slice(0, 4).join(', ')} | ล่าง: ${pred.twoDigitsBottom.slice(0, 4).join(', ')}`;
+    return `📌 [${LOTTERY_META_MAP[type].name}]\n🗓️ งวด ${info.drawDateStr} (${info.dayOfWeek})\n🔥 แกนวิน 4 ตัวลงทุน: [ ${coreWinDigits} ]\n💎 วิน 2 ตัว 12 หาง: ${win2Sets}\n👑 วิน 3 ตัวโต๊ด 4 ชุด: ${win3Toad}\n🎯 เม็ดเดียว 3 ตัวตรง: ${megaShot}`;
   });
 
   const autoMsg = `🔔 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram (ก่อนหวยออก ${telegramConfig.daysBeforeDraw} วัน)\n\n${sections.join('\n\n────────────────\n\n')}`;

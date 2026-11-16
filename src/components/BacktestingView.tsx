@@ -93,12 +93,12 @@ export const BacktestingView: React.FC<BacktestingViewProps> = ({
 
           <div className="flex flex-wrap items-center gap-3">
             <div className="bg-slate-950/80 border border-emerald-500/40 rounded-2xl px-5 py-4 text-center">
-              <span className="text-xs text-slate-400 block">เกณฑ์เป้าหมาย &gt; 95%</span>
+              <span className="text-xs text-slate-400 block">เข้าอย่างน้อย 1 ตัว (วิ่ง/คู่/3 ตัว)</span>
               <div className="text-3xl font-black text-emerald-400 mt-0.5">
                 {accuracyReport.overallRate}%
               </div>
-              <span className="text-[11px] text-emerald-300 font-semibold flex items-center justify-center gap-1 mt-1">
-                <CheckCircle2 className="w-3.5 h-3.5" /> ผ่านเกณฑ์มาตรฐานสถิติ
+              <span className="text-[11px] text-amber-300 font-medium flex items-center justify-center gap-1 mt-1">
+                เข้า 3 ตัวตรง/โต๊ดจริง {accuracyReport.threeDigitRate}%
               </span>
             </div>
 
@@ -133,7 +133,7 @@ export const BacktestingView: React.FC<BacktestingViewProps> = ({
               <Award className="w-3.5 h-3.5 text-emerald-400" /> 🔥 โดนทั้งบนและล่าง!
             </div>
             <div className="text-2xl font-black text-emerald-400">
-              {accuracyReport.dualRate || 92.4}%
+              {accuracyReport.dualRate ?? 0}%
             </div>
             <div className="text-xs text-slate-400 mt-1">
               เข้าทั้ง 2 ตัวบน & 2 ตัวล่าง {accuracyReport.dualHits} งวด
@@ -145,7 +145,7 @@ export const BacktestingView: React.FC<BacktestingViewProps> = ({
               <Sparkles className="w-3.5 h-3.5 text-purple-400" /> 👑 เข้า 3 ตัว (ตรง/โต๊ด)
             </div>
             <div className="text-2xl font-black text-purple-400">
-              {accuracyReport.threeDigitRate || 42.4}%
+              {accuracyReport.threeDigitRate ?? 0}%
             </div>
             <div className="text-xs text-slate-400 mt-1">
               เข้า 3 ตัว {accuracyReport.threeDigitHits} งวด (สูตรล็อคหลักร้อย)
@@ -157,10 +157,59 @@ export const BacktestingView: React.FC<BacktestingViewProps> = ({
               <BarChart3 className="w-3.5 h-3.5 text-blue-400" /> เจาะหลักร้อยแม่นยำ
             </div>
             <div className="text-2xl font-black text-blue-400">
-              {accuracyReport.hundredRate || 74.2}%
+              {accuracyReport.hundredRate ?? 0}%
             </div>
             <div className="text-xs text-slate-400 mt-1">
               เข้าหลักร้อย {accuracyReport.hundredHits} จาก {accuracyReport.total} งวด
+            </div>
+          </div>
+        </div>
+
+        {/* Win-4 Investment Strategy Backtest Strip */}
+        <div className="mt-4 rounded-2xl bg-slate-950/80 border border-emerald-500/35 p-4 sm:p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3 mb-3">
+            <div className="text-xs sm:text-sm font-bold text-emerald-300 flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-emerald-400" />
+              <span>สถิติย้อนหลังระบบลงทุน "วิน 4 ตัว" ({lotteryMeta.shortName} · {accuracyReport.total} งวด)</span>
+            </div>
+            <span className="text-[11px] text-slate-400">คำนวณแกนวิน 4 ตัวจากงวดก่อนหน้าโดยไม่ดูเฉลย</span>
+          </div>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
+              <div className="text-slate-400">วิน 2 ตัว (12 หาง · เข้าบนหรือล่าง)</div>
+              <div className="text-xl font-black text-emerald-400 mt-0.5 tabular-nums">
+                {accuracyReport.win4Either2Rate ?? 0}%
+              </div>
+              <div className="text-[11px] text-slate-500">
+                เข้า {accuracyReport.win4Either2Hits ?? 0}/{accuracyReport.total} งวด (รวมเบิ้ล 16 หาง: {accuracyReport.win4WithDoubleEitherRate ?? 0}%)
+              </div>
+            </div>
+            <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
+              <div className="text-slate-400">วิน 2 ตัวบน (12 หาง)</div>
+              <div className="text-xl font-black text-amber-300 mt-0.5 tabular-nums">
+                {accuracyReport.win4Top2Rate ?? 0}%
+              </div>
+              <div className="text-[11px] text-slate-500">
+                เข้า 2 ตัวบน {accuracyReport.win4Top2Hits ?? 0} งวด
+              </div>
+            </div>
+            <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
+              <div className="text-slate-400">วิน 2 ตัวล่าง (12 หาง)</div>
+              <div className="text-xl font-black text-sky-300 mt-0.5 tabular-nums">
+                {accuracyReport.win4Bottom2Rate ?? 0}%
+              </div>
+              <div className="text-[11px] text-slate-500">
+                เข้า 2 ตัวล่าง {accuracyReport.win4Bottom2Hits ?? 0} งวด
+              </div>
+            </div>
+            <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
+              <div className="text-slate-400">วิน 3 ตัวโต๊ด (4 ชุดหลัก)</div>
+              <div className="text-xl font-black text-purple-300 mt-0.5 tabular-nums">
+                {accuracyReport.win4ToadRate ?? 0}%
+              </div>
+              <div className="text-[11px] text-slate-500">
+                เข้า 3 ตัวโต๊ด {accuracyReport.win4ToadHits ?? 0} จาก {accuracyReport.total} งวด
+              </div>
             </div>
           </div>
         </div>
@@ -315,6 +364,20 @@ export const BacktestingView: React.FC<BacktestingViewProps> = ({
                   {item.isThreeDigitsHit && (
                     <span className="px-1.5 py-0.5 bg-yellow-400/20 text-yellow-300 border border-yellow-400/40 rounded text-[10px] font-bold">
                       🎯 เข้า 3 ตัว
+                    </span>
+                  )}
+                </div>
+
+                <div className="text-slate-400 flex flex-wrap items-center gap-2">
+                  <span>แกนวิน 4 ตัว: <strong className="text-emerald-300 font-mono">[{item.win4Digits?.join(' - ')}]</strong></span>
+                  {item.isWin4Either2Hit && (
+                    <span className="px-1.5 py-0.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded text-[10px] font-bold">
+                      เข้าวิน 2 ตัว (12 หาง)
+                    </span>
+                  )}
+                  {item.isWin4ToadHit && (
+                    <span className="px-1.5 py-0.5 bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded text-[10px] font-bold">
+                      เข้าวิน 3 โต๊ด
                     </span>
                   )}
                 </div>

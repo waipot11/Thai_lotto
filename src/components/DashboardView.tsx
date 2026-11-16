@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AIPredictionResult, NextDrawInfo } from '../types/lottery';
+import { buildWin4Strategy } from '../data/lotteryHistory';
 import {
   Sparkles,
   Share2,
@@ -57,14 +58,42 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const [copiedStraight, setCopiedStraight] = useState(false);
+  const [includeWin4Doubles, setIncludeWin4Doubles] = useState(false);
+  const [showAll24Straight, setShowAll24Straight] = useState(false);
+  const [copiedWin4Mode, setCopiedWin4Mode] = useState<'2d' | 'toad' | '24s' | null>(null);
   const [sourceFilter, setSourceFilter] = useState<SourceFilterCategory>('all');
 
   const totalSources = prediction.totalSourcesAnalyzed || prediction.multiSourceSummary?.length || 22;
   const sniper = prediction.sniperThreeStraight;
-  const megaShot = sniper?.megaSingleShot || prediction.topSection?.threeDigitsStraight?.[0] || '427';
+  const megaShot = sniper?.megaSingleShot || prediction.topSection?.threeDigitsStraight?.[0] || '305';
   const coreStraight = sniper?.coreStraightPicks || [];
   const backupStraight = sniper?.backupStraightPicks || [];
   const granular = prediction.granularStats;
+
+  const win4 =
+    prediction.win4Strategy ||
+    buildWin4Strategy(
+      [
+        ...(prediction.luckyDayPlanetaryNumbers || []),
+        ...(prediction.topSection?.hundredDigits || []),
+        ...(prediction.topRunners || []).map((r) => r.digit)
+      ],
+      prediction.topSection?.hundredDigits || []
+    );
+
+  const activeWin4TwoDigits = includeWin4Doubles ? win4.twoDigitWithDouble : win4.twoDigitNoDouble;
+
+  const handleCopyWin4 = (mode: '2d' | 'toad' | '24s') => {
+    const text =
+      mode === '2d'
+        ? activeWin4TwoDigits.join(' - ')
+        : mode === 'toad'
+          ? win4.threeDigitToad.join(' - ')
+          : win4.threeDigitStraightAll.join(' - ');
+    navigator.clipboard.writeText(text);
+    setCopiedWin4Mode(mode);
+    setTimeout(() => setCopiedWin4Mode(null), 2000);
+  };
 
   const filteredSources = (prediction.multiSourceSummary || []).filter((item) => {
     if (sourceFilter === 'all') return true;
@@ -73,9 +102,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   });
 
   const handleCopySummary = () => {
-    const coreList = coreStraight.length > 0 ? coreStraight.map((c) => c.number).join(', ') : prediction.threeDigitsStraight.slice(0, 3).join(', ');
     const lotteryLabel = prediction.lotteryName || 'สลากกินแบ่งรัฐบาล';
-    const text = `🎯 ฟันธง 3 ตัวตรงๆ [${lotteryLabel}] งวด ${prediction.drawDate} (${prediction.dayOfWeek})\nสังเคราะห์ ${totalSources} แหล่ง · ฐานข้อมูลจริง ${totalRealDraws} งวด (${realAccuracyRate}%)\nเม็ดเดียว 3 ตัวตรง: ${megaShot}\n3 ตัวตรงเน้นหนัก: ${coreList}\nเด่นวิ่ง-รูด: ${prediction.topRunners.map((r) => r.digit).join(' - ')}\n2 ตัวบน: ${prediction.twoDigitsTop.slice(0, 4).join(', ')}\n2 ตัวล่าง: ${prediction.twoDigitsBottom.slice(0, 4).join(', ')}`;
+    const text = `🎯 แผนลงทุนวิน 4 ตัว [${lotteryLabel}] งวด ${prediction.drawDate} (${prediction.dayOfWeek})\nสังเคราะห์ ${totalSources} แหล่ง · ฐานข้อมูลจริง ${totalRealDraws} งวด\n🔥 แกนวิน 4 ตัว: [ ${win4.digits.join(' - ')} ]\n💎 วิน 2 ตัว (${activeWin4TwoDigits.length} หาง): ${activeWin4TwoDigits.join(' · ')}\n👑 วิน 3 ตัวโต๊ด (4 ชุด): ${win4.threeDigitToad.join(' - ')}\n🎯 3 ตัวตรงเน้นสุด: ${win4.threeDigitStraightFocus.slice(0, 4).join(' - ')}\n📌 เม็ดเดียว VIP: ${megaShot}`;
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -192,6 +220,169 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span>ตั้งโพสต์ Facebook</span>
               <ArrowRight className="w-4 h-4" />
             </button>
+          </div>
+        </div>
+
+        {/* PRIMARY INVESTMENT MODE: แผนลงทุนระบบวิน 4 ตัว (Win 4 Strategy) */}
+        <div className="rounded-2xl bg-slate-950/90 border border-emerald-500/45 p-5 sm:p-7 space-y-5">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
+            <div>
+              <div className="text-xs font-semibold text-emerald-400 flex items-center gap-1.5">
+                <TrendingUp className="w-4 h-4" />
+                <span>ระบบลงทุน วิน 4 ตัว ({prediction.lotteryName || 'สลากกินแบ่งรัฐบาล'}) · คุมทุนและความถี่</span>
+              </div>
+              <h3 className="text-xl sm:text-2xl font-extrabold text-white mt-1">
+                แกนเลขวิน 4 ตัวหลัก งวด {prediction.drawDate}
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">{win4.rationale}</p>
+            </div>
+
+            {/* 4 Core Win Balls */}
+            <div className="flex items-center gap-2.5 self-start md:self-auto">
+              {win4.digits.map((digit, idx) => (
+                <div
+                  key={`${digit}-${idx}`}
+                  className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-br from-emerald-300 via-emerald-500 to-teal-600 shadow-lg shadow-emerald-500/20 border-2 border-emerald-200/70 flex items-center justify-center"
+                >
+                  <span className="text-3xl sm:text-4xl font-black text-slate-950 tabular-nums">{digit}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Left 6 cols: Win-4 2-Digit Matrix (12 or 16 sets) */}
+            <div className="lg:col-span-6 rounded-xl bg-slate-900/75 border border-slate-800 p-4 sm:p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-sm font-bold text-white">
+                    วิน 2 ตัว ({activeWin4TwoDigits.length} หาง · ไป-กลับ บน/ล่าง)
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    โอกาสเข้าต่อฝั่งตามคณิตศาสตร์: {includeWin4Doubles ? '16%' : '12%'}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <div className="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-xs">
+                    <button
+                      onClick={() => setIncludeWin4Doubles(false)}
+                      className={`px-2.5 py-1 rounded-md font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                        !includeWin4Doubles ? 'bg-emerald-500 text-slate-950' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      12 หาง (ไม่เบิ้ล)
+                    </button>
+                    <button
+                      onClick={() => setIncludeWin4Doubles(true)}
+                      className={`px-2.5 py-1 rounded-md font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                        includeWin4Doubles ? 'bg-emerald-500 text-slate-950' : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      16 หาง (+เบิ้ล)
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => handleCopyWin4('2d')}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-xs font-semibold flex items-center gap-1 whitespace-nowrap shrink-0"
+                  >
+                    {copiedWin4Mode === '2d' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedWin4Mode === '2d' ? 'คัดลอกแล้ว' : 'คัดลอก'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
+                {activeWin4TwoDigits.map((pair) => {
+                  const isDouble = pair[0] === pair[1];
+                  return (
+                    <div
+                      key={pair}
+                      className={`rounded-lg py-2 text-center font-mono text-base font-black tabular-nums border ${
+                        isDouble
+                          ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                          : 'bg-slate-950 border-slate-800 text-emerald-300'
+                      }`}
+                    >
+                      {pair}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Right 6 cols: Win-4 3-Digit Toad (4 sets) + 3-Digit Straight (24 sets / 8 focus) */}
+            <div className="lg:col-span-6 rounded-xl bg-slate-900/75 border border-slate-800 p-4 sm:p-5 space-y-4">
+              {/* 3-Digit Toad 4 Sets */}
+              <div className="space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-bold text-amber-300">
+                      วิน 3 ตัวโต๊ด (4 ชุดหลัก · ประหยัดทุน 6 เท่า)
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      ครอบคลุม 24 รูปแบบตรง (โอกาสเข้า 2.4%) ไม่ต้องกังวลสลับหลัก
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => handleCopyWin4('toad')}
+                    className="px-2.5 py-1.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center gap-1 whitespace-nowrap shrink-0"
+                  >
+                    {copiedWin4Mode === 'toad' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedWin4Mode === 'toad' ? 'คัดลอกแล้ว' : 'คัดลอก 4 โต๊ด'}</span>
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-4 gap-2">
+                  {win4.threeDigitToad.map((num) => (
+                    <div
+                      key={num}
+                      className="rounded-lg bg-amber-500/10 border border-amber-400/40 py-2.5 text-center font-mono text-lg font-black text-amber-300 tabular-nums tracking-wider"
+                    >
+                      {num}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 3-Digit Straight 8 Focus / All 24 */}
+              <div className="border-t border-slate-800 pt-3 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-semibold text-slate-200">
+                    {showAll24Straight
+                      ? 'วิน 3 ตัวตรงครบเซต (24 หางตรง)'
+                      : 'วิน 3 ตัวตรงคัดเน้นตามหลักร้อยเด่น (8 จาก 24 หาง)'}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setShowAll24Straight((v) => !v)}
+                      className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-700 text-slate-300 hover:text-white text-xs font-medium whitespace-nowrap shrink-0"
+                    >
+                      {showAll24Straight ? 'ย่อเหลือ 8 ชุดเน้น' : 'ดูครบ 24 หางตรง'}
+                    </button>
+                    <button
+                      onClick={() => handleCopyWin4('24s')}
+                      className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1 whitespace-nowrap shrink-0"
+                    >
+                      {copiedWin4Mode === '24s' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedWin4Mode === '24s' ? 'คัดลอกแล้ว' : 'คัดลอก 24 หาง'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-4 sm:grid-cols-6 gap-1.5">
+                  {(showAll24Straight ? win4.threeDigitStraightAll : win4.threeDigitStraightFocus).map((num) => (
+                    <div
+                      key={num}
+                      className="rounded-md bg-slate-950 border border-slate-800 py-1.5 text-center font-mono text-xs font-bold text-slate-200 tabular-nums"
+                    >
+                      {num}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 

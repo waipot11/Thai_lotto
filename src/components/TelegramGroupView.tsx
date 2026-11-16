@@ -121,16 +121,15 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
 
   const generatedMessage = useMemo(() => {
     const formatLotterySection = (pred: AIPredictionResult, showHeaderPrefix: boolean) => {
-      const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight?.[0] || '427';
+      const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight?.[0] || '305';
+      const win4 = pred.win4Strategy;
+      const win4Digits = win4 ? win4.digits.join(' - ') : (pred.luckyDayPlanetaryNumbers || []).slice(0, 4).join(' - ');
+      const win2Sets = win4 ? win4.twoDigitNoDouble.join(' · ') : (pred.twoDigitsTop || []).slice(0, 8).join(' · ');
+      const win3Toad = win4 ? win4.threeDigitToad.join(' · ') : (pred.threeDigitsToad || []).slice(0, 4).join(' · ');
       const coreStraight = (
         pred.sniperThreeStraight?.coreStraightPicks?.map((p) => p.number) ||
         pred.threeDigitsStraight?.slice(0, 3) ||
         [megaShot]
-      ).join(' · ');
-      const backupStraight = (
-        pred.sniperThreeStraight?.backupStraightPicks?.map((p) => p.number) ||
-        pred.threeDigitsStraight?.slice(3, 6) ||
-        []
       ).join(' · ');
       const lotteryLabel = pred.lotteryName || LOTTERY_META_MAP[pred.lotteryType || 'gov'].name;
 
@@ -139,28 +138,24 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
         secLines.push(`📌 [${lotteryLabel}]`);
       }
       secLines.push(`🗓️ งวด ${pred.drawDate} (${pred.dayOfWeek})`);
+      secLines.push(`🔥 แกนวิน 4 ตัวลงทุน: [ ${win4Digits} ]`);
 
-      if (config.includeThreeStraight) {
-        secLines.push(`👑 เม็ดเดียว 3 ตัวตรง ฟันธง: ${megaShot}`);
-        secLines.push(`🎯 3 ตัวตรงเน้นหนัก: ${coreStraight}`);
-        if (backupStraight && !showHeaderPrefix) {
-          secLines.push(`🛡️ กันพลาด 3 ตัว: ${backupStraight}`);
+      if (config.includeTwoDigits) {
+        secLines.push(`💎 วิน 2 ตัว 12 หาง: ${win2Sets}`);
+        if (!showHeaderPrefix && win4?.twoDigitDoubles?.length) {
+          secLines.push(`🛡️ กันเบิ้ล 4 หาง: ${win4.twoDigitDoubles.join(' · ')}`);
         }
       }
 
-      if (config.includeRunners) {
+      if (config.includeThreeStraight) {
+        secLines.push(`👑 วิน 3 ตัวโต๊ด 4 ชุด: ${win3Toad}`);
+        secLines.push(`🎯 เม็ดเดียวตรง: ${megaShot} (เน้น: ${coreStraight})`);
+      }
+
+      if (config.includeRunners && !showHeaderPrefix) {
         secLines.push(
-          `⚡ วิ่ง-รูดตัวเดียว: ${pred.topSection?.runningDigit || '2'} (รอง ${pred.topSection?.runningSub || '4'})`
+          `⚡ วิ่ง-รูดตัวเดียว: ${pred.topSection?.runningDigit || win4?.digits?.[0] || '3'} (รอง ${pred.topSection?.runningSub || win4?.digits?.[1] || '0'})`
         );
-      }
-
-      if (config.includeTwoDigits) {
-        secLines.push(`💎 2 ตัวบน: ${(pred.twoDigitsTop || []).slice(0, 4).join(' - ')}`);
-        secLines.push(`🔹 2 ตัวล่าง: ${(pred.twoDigitsBottom || []).slice(0, 4).join(' - ')}`);
-      }
-
-      if (!showHeaderPrefix) {
-        secLines.push(`⚠️ ระวังเลขเบิ้ล: ${(pred.cautionDoubles || []).join(' - ')}`);
       }
 
       return secLines.join('\n');

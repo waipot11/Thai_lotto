@@ -369,6 +369,14 @@ export function getNextDrawInfoByType(
       } else if (nextDrawDate.getMonth() === 4 && nextDrawDate.getDate() === 1) {
         nextDrawDate.setDate(2);
       }
+      // หากเป็นงวดวันที่ 16 พฤศจิกายน 2569 ซึ่งประกาศผลรางวัลแล้ว (645654 / 06) ให้ขยับไปงวด 1 ธันวาคม 2569
+      if (
+        nextDrawDate.getFullYear() === 2026 &&
+        nextDrawDate.getMonth() === 10 &&
+        nextDrawDate.getDate() === 16
+      ) {
+        nextDrawDate = new Date(2026, 11, 1);
+      }
     }
   }
 
@@ -468,11 +476,11 @@ export function getAvailableDrawsByType(lotteryType: LotteryType, nextDraw: Next
       badge: 'งวดถัดไป'
     },
     {
-      id: '2569-11-01',
-      drawDateStr: '1 พฤศจิกายน 2569',
-      dayOfWeek: 'วันอาทิตย์',
-      drawDateIso: '2026-11-01',
-      badge: 'งวด 1 พ.ย.'
+      id: '2569-11-16',
+      drawDateStr: '16 พฤศจิกายน 2569',
+      dayOfWeek: 'วันจันทร์',
+      drawDateIso: '2026-11-16',
+      badge: 'งวด 16 พ.ย. (645654 / 06)'
     },
     {
       id: '2569-10-16',

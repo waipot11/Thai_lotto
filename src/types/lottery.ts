@@ -92,6 +92,17 @@ export interface SniperThreeStraightFocus {
   backupStraightPicks: StraightPickDetail[]; // กันพลาด 3 ชุดรอง
 }
 
+export interface Win4InvestmentStrategy {
+  digits: string[]; // เลขวิน 4 ตัวหลัก เช่น ["3", "0", "5", "6"]
+  twoDigitNoDouble: string[]; // 12 หางไป-กลับ (ไม่รวมเบิ้ล)
+  twoDigitDoubles: string[]; // 4 หางเบิ้ลกันทุน
+  twoDigitWithDouble: string[]; // 16 หางรวมเบิ้ล
+  threeDigitToad: string[]; // 4 ชุดโต๊ดหลัก
+  threeDigitStraightAll: string[]; // 24 หางตรงครบทุกตำแหน่ง
+  threeDigitStraightFocus: string[]; // 8 ชุดตรงเน้นสุดตามหลักร้อยเด่น
+  rationale: string;
+}
+
 export interface AIPredictionResult {
   lotteryType?: LotteryType;
   lotteryName?: string;
@@ -103,6 +114,9 @@ export interface AIPredictionResult {
 
   // Definitive 3-Digit Straight Sniper Focus
   sniperThreeStraight?: SniperThreeStraightFocus;
+
+  // 4-Digit Win Investment Strategy (วิน 4 ตัว: 12 หาง, 16 หางรวมเบิ้ล, 4 โต๊ด, 24 ตรง)
+  win4Strategy?: Win4InvestmentStrategy;
 
   // Deep Positional & Exclusion Granularity
   granularStats?: GranularStatsBreakdown;

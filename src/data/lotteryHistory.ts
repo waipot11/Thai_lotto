@@ -7,7 +7,8 @@ import {
   NextDrawInfo,
   PositionDigitCandidate,
   SniperThreeStraightFocus,
-  StraightPickDetail
+  StraightPickDetail,
+  Win4InvestmentStrategy
 } from '../types/lottery';
 import { getSourcesForDayOfWeek } from './sourcesData.ts';
 import {
@@ -18,7 +19,18 @@ import {
 
 // Real historical Thai Government Lottery (สลากกินแบ่งรัฐบาล) dataset
 export const HISTORICAL_DRAWS: LotteryDraw[] = [
-  // งวดล่าสุดที่เพิ่งออก (16 ตุลาคม 2569 / 2026)
+  // งวดล่าสุด (16 พฤศจิกายน 2569 / 2026) - ผลออกจริง
+  {
+    id: '2569-11-16',
+    drawDate: '16 พฤศจิกายน 2569',
+    dateIso: '2026-11-16',
+    dayOfWeek: 'วันจันทร์',
+    firstPrize: '645654',
+    last2Digits: '06',
+    first3Digits: ['101', '938'],
+    last3Digits: ['106', '782']
+  },
+  // 16 ตุลาคม 2569 / 2026
   {
     id: '2569-10-16',
     drawDate: '16 ตุลาคม 2569',
@@ -840,6 +852,78 @@ export function calculateDigitStats(draws: LotteryDraw[] = HISTORICAL_DRAWS) {
   };
 }
 
+// Helper: Build 4-Digit Win Strategy (12 non-double 2D, 4 double 2D, 4 3D toad, 24 3D straight)
+export function buildWin4Strategy(
+  candidateDigits: string[],
+  priorityHundreds: string[] = [],
+  rationale: string = 'คำนวณ 4 แกนหลักจากสถิติย้อนหลังและแรงหนุนตำแหน่งบน-ล่าง'
+): Win4InvestmentStrategy {
+  const cleanDigits: string[] = [];
+  for (const d of candidateDigits) {
+    if (/^\d$/.test(d) && !cleanDigits.includes(d)) {
+      cleanDigits.push(d);
+    }
+    if (cleanDigits.length === 4) break;
+  }
+  const fallbackPool = ['3', '0', '5', '6', '8', '2', '7', '4', '9', '1'];
+  for (const f of fallbackPool) {
+    if (cleanDigits.length >= 4) break;
+    if (!cleanDigits.includes(f)) cleanDigits.push(f);
+  }
+
+  const twoDigitNoDouble: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      if (i !== j) {
+        twoDigitNoDouble.push(`${cleanDigits[i]}${cleanDigits[j]}`);
+      }
+    }
+  }
+  const twoDigitDoubles = cleanDigits.map((d) => `${d}${d}`);
+  const twoDigitWithDouble = [...twoDigitNoDouble, ...twoDigitDoubles];
+
+  const threeDigitToad: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    for (let j = i + 1; j < 4; j++) {
+      for (let k = j + 1; k < 4; k++) {
+        threeDigitToad.push(`${cleanDigits[i]}${cleanDigits[j]}${cleanDigits[k]}`);
+      }
+    }
+  }
+
+  const threeDigitStraightAll: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      if (j === i) continue;
+      for (let k = 0; k < 4; k++) {
+        if (k === i || k === j) continue;
+        threeDigitStraightAll.push(`${cleanDigits[i]}${cleanDigits[j]}${cleanDigits[k]}`);
+      }
+    }
+  }
+
+  const threeDigitStraightFocus = [...threeDigitStraightAll]
+    .sort((a, b) => {
+      const idxA = priorityHundreds.indexOf(a[0]);
+      const idxB = priorityHundreds.indexOf(b[0]);
+      const scoreA = idxA === -1 ? 99 : idxA;
+      const scoreB = idxB === -1 ? 99 : idxB;
+      return scoreA - scoreB;
+    })
+    .slice(0, 8);
+
+  return {
+    digits: cleanDigits,
+    twoDigitNoDouble,
+    twoDigitDoubles,
+    twoDigitWithDouble,
+    threeDigitToad,
+    threeDigitStraightAll,
+    threeDigitStraightFocus,
+    rationale
+  };
+}
+
 // REAL DATABASE BACKTEST & ACCURACY VERIFIER
 // Synthesizes the algorithm against each draw in HISTORICAL_DRAWS using past historical priors and calculates true hit rate!
 export interface RealBacktestResult {
@@ -858,6 +942,12 @@ export interface RealBacktestResult {
   predictedPairsBottom: string[];
   predictedThreeDigitsStraight: string[];
   predictedThreeDigitsToad: string[];
+  win4Digits: string[];
+  isWin4Top2Hit: boolean;
+  isWin4Bottom2Hit: boolean;
+  isWin4Either2Hit: boolean;
+  isWin4WithDoubleEitherHit: boolean;
+  isWin4ToadHit: boolean;
   isRunnerHit: boolean;
   isPairHit: boolean;
   isTopHit: boolean;
@@ -1025,10 +1115,36 @@ export function evaluateRealDatabaseAccuracy(draws: LotteryDraw[] = HISTORICAL_D
     // Check Hundred Hit
     const isHundredHit = predictedHundreds.includes(actualHundred);
 
+    // 4-Digit Win Backtest (using top 4 prior digits without peeking at current draw)
+    const combinedScores: Record<string, number> = {};
+    for (let d = 0; d <= 9; d++) {
+      const k = d.toString();
+      combinedScores[k] = (digitFreqTop[k] || 0) * 1.15 + (digitFreqBottom[k] || 0) + (planetary.includes(k) ? 1.8 : 0);
+    }
+    const win4Digits = Object.entries(combinedScores)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([d]) => d);
+    const win4Set = buildWin4Strategy(win4Digits, predictedHundreds);
+    const isWin4Top2Hit = win4Set.twoDigitNoDouble.includes(actualTop2);
+    const isWin4Bottom2Hit = win4Set.twoDigitNoDouble.includes(actualBottom2);
+    const isWin4Either2Hit = isWin4Top2Hit || isWin4Bottom2Hit;
+    const isWin4WithDoubleEitherHit =
+      win4Set.twoDigitWithDouble.includes(actualTop2) || win4Set.twoDigitWithDouble.includes(actualBottom2);
+    const isWin4ToadHit = win4Set.threeDigitToad.some(
+      (t) => t.split('').sort().join('') === actualTop3Sorted
+    );
+
     const isOverallHit = isRunnerHit || isPairHit || isThreeDigitsHit;
 
     let details = '';
-    if (isDualHit) {
+    if (isWin4Either2Hit || isWin4ToadHit) {
+      const winNotes: string[] = [];
+      if (isWin4Top2Hit) winNotes.push(`วิน 2 บน (${actualTop2})`);
+      if (isWin4Bottom2Hit) winNotes.push(`วิน 2 ล่าง (${actualBottom2})`);
+      if (isWin4ToadHit) winNotes.push(`วิน 3 โต๊ด (${actualTop3})`);
+      details = `✅ เข้า${winNotes.join(' + ')} จากแกนวิน [${win4Digits.join('-')}]`;
+    } else if (isDualHit) {
       details = `🔥 โดนทั้งบนและล่าง! (บน: ${actualTop2}, ล่าง: ${actualBottom2}) ${isThreeDigitsHit ? '🎯 เข้า 3 ตัวด้วย!' : ''}`;
     } else if (isThreeDigitsHit) {
       details = `👑 เข้าชุด 3 ตัว (${matchedThreeDigits.join(', ')}) และเข้าเด่น (${matchedRunners.join(', ')})`;
@@ -1056,6 +1172,12 @@ export function evaluateRealDatabaseAccuracy(draws: LotteryDraw[] = HISTORICAL_D
       predictedPairsBottom,
       predictedThreeDigitsStraight,
       predictedThreeDigitsToad,
+      win4Digits,
+      isWin4Top2Hit,
+      isWin4Bottom2Hit,
+      isWin4Either2Hit,
+      isWin4WithDoubleEitherHit,
+      isWin4ToadHit,
       isRunnerHit,
       isPairHit,
       isTopHit,
@@ -1080,6 +1202,11 @@ export function evaluateRealDatabaseAccuracy(draws: LotteryDraw[] = HISTORICAL_D
   const threeDigitHits = results.filter((r) => r.isThreeDigitsHit).length;
   const hundredHits = results.filter((r) => r.isHundredHit).length;
   const overallHits = results.filter((r) => r.isOverallHit).length;
+  const win4Top2Hits = results.filter((r) => r.isWin4Top2Hit).length;
+  const win4Bottom2Hits = results.filter((r) => r.isWin4Bottom2Hit).length;
+  const win4Either2Hits = results.filter((r) => r.isWin4Either2Hit).length;
+  const win4WithDoubleEitherHits = results.filter((r) => r.isWin4WithDoubleEitherHit).length;
+  const win4ToadHits = results.filter((r) => r.isWin4ToadHit).length;
 
   const runnerRate = total > 0 ? parseFloat(((runnerHits / total) * 100).toFixed(1)) : 0;
   const pairRate = total > 0 ? parseFloat(((pairHits / total) * 100).toFixed(1)) : 0;
@@ -1089,6 +1216,11 @@ export function evaluateRealDatabaseAccuracy(draws: LotteryDraw[] = HISTORICAL_D
   const threeDigitRate = total > 0 ? parseFloat(((threeDigitHits / total) * 100).toFixed(1)) : 0;
   const hundredRate = total > 0 ? parseFloat(((hundredHits / total) * 100).toFixed(1)) : 0;
   const overallRate = total > 0 ? parseFloat(((overallHits / total) * 100).toFixed(1)) : 0;
+  const win4Top2Rate = total > 0 ? parseFloat(((win4Top2Hits / total) * 100).toFixed(1)) : 0;
+  const win4Bottom2Rate = total > 0 ? parseFloat(((win4Bottom2Hits / total) * 100).toFixed(1)) : 0;
+  const win4Either2Rate = total > 0 ? parseFloat(((win4Either2Hits / total) * 100).toFixed(1)) : 0;
+  const win4WithDoubleEitherRate = total > 0 ? parseFloat(((win4WithDoubleEitherHits / total) * 100).toFixed(1)) : 0;
+  const win4ToadRate = total > 0 ? parseFloat(((win4ToadHits / total) * 100).toFixed(1)) : 0;
 
   return {
     results,
@@ -1101,6 +1233,11 @@ export function evaluateRealDatabaseAccuracy(draws: LotteryDraw[] = HISTORICAL_D
     threeDigitHits,
     hundredHits,
     overallHits,
+    win4Top2Hits,
+    win4Bottom2Hits,
+    win4Either2Hits,
+    win4WithDoubleEitherHits,
+    win4ToadHits,
     runnerRate,
     pairRate,
     topRate,
@@ -1108,7 +1245,12 @@ export function evaluateRealDatabaseAccuracy(draws: LotteryDraw[] = HISTORICAL_D
     dualRate,
     threeDigitRate,
     hundredRate,
-    overallRate
+    overallRate,
+    win4Top2Rate,
+    win4Bottom2Rate,
+    win4Either2Rate,
+    win4WithDoubleEitherRate,
+    win4ToadRate
   };
 }
 
@@ -1123,21 +1265,33 @@ export function computeGranularPositionalStats(
   const recentWindow = draws.slice(0, 24);
   const totalSources = activeSources.length || 22;
   const isSpecialLottery = lotteryType !== 'gov';
-  const cohortMultiplier = isSpecialLottery ? 4.8 : 3.2;
-  const decayMultiplier = isSpecialLottery ? 2.4 : 1.0;
-  const sourceMultiplier = isSpecialLottery ? 0.25 : 1.0;
+  const cohortMultiplier = isSpecialLottery ? 4.8 : 3.8;
+  const decayMultiplier = isSpecialLottery ? 2.4 : 1.7;
+  const sourceMultiplier = isSpecialLottery ? 0.25 : 0.45;
+  const latestTop3 = draws[0]?.firstPrize?.slice(-3) || '';
 
   const scorePosition = (posIndexFromEnd: number, label: string): PositionDigitCandidate[] => {
     const scores: Record<string, number> = {};
     const cohortHits: Record<string, number> = {};
     const sourceVotes: Record<string, number> = {};
+    const lastSeenGap: Record<string, number> = {};
 
     for (let d = 0; d <= 9; d++) {
       const k = d.toString();
       scores[k] = 0;
       cohortHits[k] = 0;
       sourceVotes[k] = 0;
+      lastSeenGap[k] = draws.length;
     }
+
+    // Track overdue gap (งวดที่ห่างหายไปของเลขแต่ละหลัก)
+    draws.forEach((draw, idx) => {
+      const top3 = draw.firstPrize.slice(-3);
+      const digit = top3[posIndexFromEnd];
+      if (digit && lastSeenGap[digit] === draws.length) {
+        lastSeenGap[digit] = idx;
+      }
+    });
 
     // 1. Historical cohort weight (draws falling on same dayOfWeek)
     dayCohort.forEach((draw) => {
@@ -1158,6 +1312,18 @@ export function computeGranularPositionalStats(
         scores[digit] += decayWeight;
       }
     });
+
+    // 2.5 Mean-reversion overdue boost + Anti-repeat penalty on immediate previous draw's exact position
+    for (let d = 0; d <= 9; d++) {
+      const k = d.toString();
+      const gap = lastSeenGap[k];
+      if (gap >= 4 && gap <= 14) {
+        scores[k] += Math.min(4.5, gap * 0.35);
+      }
+      if (latestTop3[posIndexFromEnd] === k) {
+        scores[k] -= 2.2;
+      }
+    }
 
     // 3. Cross-source positional alignment votes (across all active sources)
     activeSources.forEach((src) => {
@@ -1387,23 +1553,22 @@ export function generateDynamicLotteryPrediction(
   const granularStats = computeGranularPositionalStats(drawsPool, dayOfWeek, activeSources, lotteryType);
   const lotteryMeta = LOTTERY_META_MAP[lotteryType] || LOTTERY_META_MAP.gov;
 
-  // Customize candidate digits per lottery type so ธ.ก.ส. and ออมสิน reflect their own real draw pools
+  // Data-driven candidate digits computed directly from each lottery's latest real draws + overdue/anti-repeat rules
   const dayData = (() => {
-    if (lotteryType === 'gov') return baseDayData;
-
     const hTop = granularStats.hundredAnalysis.map((c) => c.digit);
     const tTop = granularStats.tenAnalysis.map((c) => c.digit);
     const uTop = granularStats.unitAnalysis.map((c) => c.digit);
 
-    const h0 = hTop[0] || (lotteryType === 'baac' ? '6' : '5');
-    const h1 = hTop[1] || (lotteryType === 'baac' ? '2' : '9');
-    const h2 = hTop[2] || (lotteryType === 'baac' ? '8' : '3');
-    const t0 = tTop[0] || (lotteryType === 'baac' ? '4' : '1');
-    const t1 = tTop[1] || (lotteryType === 'baac' ? '9' : '6');
-    const u0 = uTop[0] || (lotteryType === 'baac' ? '7' : '8');
-    const u1 = uTop[1] || (lotteryType === 'baac' ? '3' : '2');
-    const u2 = uTop[2] || (lotteryType === 'baac' ? '1' : '4');
+    const h0 = hTop[0] || baseDayData.hundreds[0] || '6';
+    const h1 = hTop[1] || baseDayData.hundreds[1] || '2';
+    const h2 = hTop[2] || baseDayData.hundreds[2] || '8';
+    const t0 = tTop[0] || baseDayData.runners[0] || '4';
+    const t1 = tTop[1] || baseDayData.runners[1] || '9';
+    const u0 = uTop[0] || baseDayData.runners[2] || '7';
+    const u1 = uTop[1] || baseDayData.subRunners[0] || '3';
+    const u2 = uTop[2] || baseDayData.subRunners[1] || '1';
 
+    const latestTop3 = drawsPool[0]?.firstPrize?.slice(-3) || '';
     const rawStraight = [
       `${h0}${t0}${u0}`,
       `${h1}${t0}${u0}`,
@@ -1412,13 +1577,22 @@ export function generateDynamicLotteryPrediction(
       `${h1}${t1}${u0}`,
       `${h0}${t0}${u2}`,
       `${h2}${t1}${u1}`,
-      `${h1}${t0}${u2}`
-    ];
+      `${h1}${t0}${u2}`,
+      `${h0}${t1}${u0}`,
+      `${h1}${t1}${u1}`
+    ].filter((num) => num !== latestTop3);
+
     const uniqueStraight = Array.from(new Set(rawStraight));
     while (uniqueStraight.length < 8) {
-      uniqueStraight.push(`${(Number(h0) + uniqueStraight.length) % 10}${t0}${u1}`);
+      const candidate = `${(Number(h0) + uniqueStraight.length + 1) % 10}${t0}${u1}`;
+      if (candidate !== latestTop3 && !uniqueStraight.includes(candidate)) {
+        uniqueStraight.push(candidate);
+      } else {
+        uniqueStraight.push(`${(Number(h1) + uniqueStraight.length + 2) % 10}${t1}${u0}`);
+      }
     }
 
+    const latestTop2 = drawsPool[0]?.firstPrize?.slice(-2) || '';
     const top2 = Array.from(
       new Set([
         `${t0}${u0}`, `${u0}${t0}`,
@@ -1426,26 +1600,43 @@ export function generateDynamicLotteryPrediction(
         `${t1}${u0}`, `${u0}${t1}`,
         `${h0}${t0}`, `${t1}${u1}`
       ])
-    );
+    ).filter((p) => p !== latestTop2);
 
-    const latestBottom = drawsPool[0]?.last2Digits || '73';
-    const b0 = String((Number(latestBottom[0] || 4) + (lotteryType === 'baac' ? 3 : 5)) % 10);
-    const b1 = u0 === b0 ? u1 : u0;
+    // Bottom 2-digit frequency from real drawsPool (last2Digits)
+    const bottomCounts: Record<string, number> = {};
+    for (let d = 0; d <= 9; d++) bottomCounts[d.toString()] = 0;
+    drawsPool.slice(0, 24).forEach((d, idx) => {
+      const weight = Math.max(0.5, 2.0 - idx * 0.06);
+      for (const ch of d.last2Digits || '') {
+        if (bottomCounts[ch] !== undefined) bottomCounts[ch] += weight;
+      }
+    });
+    const latestBottom = drawsPool[0]?.last2Digits || '06';
+    for (const ch of latestBottom) {
+      if (bottomCounts[ch] !== undefined) bottomCounts[ch] -= 1.5;
+    }
+    const rankedBottom = Object.entries(bottomCounts)
+      .sort((a, b) => b[1] - a[1])
+      .map(([digit]) => digit);
+
+    const b0 = rankedBottom[0] || String((Number(latestBottom[0] || 4) + 3) % 10);
+    const b1 = rankedBottom[1] || (u0 === b0 ? u1 : u0);
+    const b2 = rankedBottom[2] || t1;
     const bottom2 = Array.from(
       new Set([
         `${b0}${b1}`, `${b1}${b0}`,
-        `${b0}${t1}`, `${t1}${b0}`,
+        `${b0}${b2}`, `${b2}${b0}`,
         `${t0}${b1}`, `${b1}${t0}`,
         `${h1}${b1}`, `${b0}${u2}`
       ])
-    );
+    ).filter((p) => p !== latestBottom);
 
     return {
       runners: [t0, u0, b0],
-      subRunners: [h0, t1],
+      subRunners: [h0, b1],
       hundreds: [h0, h1, h2],
-      top2,
-      bottom2,
+      top2: top2.slice(0, 8),
+      bottom2: bottom2.slice(0, 8),
       threeStraight: uniqueStraight.slice(0, 8),
       threeToad: [
         `${h0}${t0}${u0}`, `${h1}${t0}${u1}`, `${h0}${t1}${u0}`,
@@ -1457,9 +1648,9 @@ export function generateDynamicLotteryPrediction(
         String(Number(h1) + Number(t0) + Number(u0)),
         String(Number(h0) + Number(t1) + Number(u1))
       ],
-      sumBottom: [String(Number(b0) + Number(b1)), String(Number(b0) + Number(t1)), String(Number(t0) + Number(b1))],
+      sumBottom: [String(Number(b0) + Number(b1)), String(Number(b0) + Number(b2)), String(Number(t0) + Number(b1))],
       planetaryPair: `${b0}${b1}`,
-      narrativeHighlight: `วิเคราะห์จากฐานข้อมูล ${lotteryMeta.name} ${drawsPool.length} งวดล่าสุด เจาะหลักร้อย ${h0}-${h1}-${h2} และคู่ท้าย ${t0}${u0}`
+      narrativeHighlight: `วิเคราะห์จากฐานข้อมูล ${lotteryMeta.name} ${drawsPool.length} งวดล่าสุด (ตัดซ้ำงวดก่อน ${latestTop3 || '-'} / ${latestBottom}) เจาะหลักร้อย ${h0}-${h1}-${h2} และคู่ท้าย ${t0}${u0}`
     };
   })();
 
@@ -1533,6 +1724,19 @@ export function generateDynamicLotteryPrediction(
     };
   });
 
+  const win4Strategy = buildWin4Strategy(
+    [
+      dayData.hundreds[0],
+      dayData.runners[0],
+      dayData.runners[1],
+      dayData.runners[2],
+      dayData.subRunners[0],
+      dayData.subRunners[1]
+    ],
+    dayData.hundreds,
+    `คัด 4 แกนเด่นจากฐานข้อมูล ${lotteryMeta.name} (${drawsPool.length} งวด) เพื่อวางชุดวิน 2 ตัว 12 หาง (รวมเบิ้ล 16 หาง) และวิน 3 ตัว 4 โต๊ด / 24 หางตรง`
+  );
+
   const lotteryTag =
     lotteryType === 'baac' ? '#หวยธกส #สลากธกส' : lotteryType === 'gsb' ? '#หวยออมสิน #สลากออมสิน' : '#หวยรัฐบาล';
 
@@ -1545,6 +1749,7 @@ export function generateDynamicLotteryPrediction(
     confidenceScore: lotteryType === 'gov' ? 97 : 96,
     totalSourcesAnalyzed: totalSources,
     sniperThreeStraight,
+    win4Strategy,
     granularStats,
     topRunners: [
       {
@@ -1569,9 +1774,9 @@ export function generateDynamicLotteryPrediction(
       hundredDigits: dayData.hundreds,
       tenDigits: [r0, r1],
       unitDigits: [r1, r2, dayData.subRunners[0] || '0'],
-      twoDigitsTop: dayData.top2,
-      threeDigitsStraight: dayData.threeStraight,
-      threeDigitsToad: dayData.threeToad,
+      twoDigitsTop: win4Strategy.twoDigitNoDouble.slice(0, 8),
+      threeDigitsStraight: win4Strategy.threeDigitStraightFocus,
+      threeDigitsToad: win4Strategy.threeDigitToad,
       sumDigitsTop: dayData.sumTop
     },
     bottomSection: {
@@ -1586,15 +1791,15 @@ export function generateDynamicLotteryPrediction(
       bottomHitRate: 97.8,
       bothHitRate: 96.1
     },
-    twoDigitsTop: dayData.top2,
+    twoDigitsTop: win4Strategy.twoDigitNoDouble.slice(0, 8),
     twoDigitsBottom: dayData.bottom2,
-    threeDigitsStraight: dayData.threeStraight,
-    threeDigitsToad: dayData.threeToad,
-    cautionDoubles: dayData.cautionDoubles,
-    luckyDayPlanetaryNumbers: [...dayData.runners, ...(dayData.subRunners || [])].slice(0, 4),
-    aiNarrative: `🔬 สรุปผลสังเคราะห์เชิงลึก [${lotteryMeta.name}] จาก ${totalSources} แหล่งข้อมูล & ฐานข้อมูลสลากจริง ${drawsPool.length} งวด (งวดวันที่ ${drawDate} · ${dayOfWeek}):\n\n1. ฟันธง 3 ตัวตรงๆ เม็ดเดียว VIP คือ '${vip3}' (ชนตรงกัน ${sniperThreeStraight.consensusCount}/${totalSources} แหล่ง):\n   • หลักร้อยล็อค '${vip3[0]}': ${sniperThreeStraight.positionBreakdown.hundredReason}\n   • หลักสิบล็อค '${vip3[1]}': ${sniperThreeStraight.positionBreakdown.tenReason}\n   • หลักหน่วยล็อค '${vip3[2]}': ${sniperThreeStraight.positionBreakdown.unitReason}\n   • โครงสร้างแต้มรวม 3 ตัวตรง: แต้ม ${calcSum(vip3)} อยู่ในช่วงสถิติทองคำ (${granularStats.threeDigitStructure.topSumRange})\n2. ชุด 3 ตัวตรงเน้นหนัก 3 หางหลัก: ${coreStraightPicks.map((p) => p.number).join(' - ')} (ชุดกันพลาด: ${backupStraightPicks.map((p) => p.number).join(' - ')})\n3. คัดกรองเลขดับ-ตัดคู่ซ้ำ: ตัดคู่ ${granularStats.eliminatedDigits[0]?.digitOrPair} และ ${granularStats.eliminatedDigits[1]?.digitOrPair} ออกเพื่อเพิ่มความเฉียบคม\n4. สรุปชุด 2 ตัวบน-ล่าง: บน [${dayData.top2.slice(0, 4).join(', ')}] · ล่าง [${dayData.bottom2.slice(0, 4).join(', ')}]`,
+    threeDigitsStraight: win4Strategy.threeDigitStraightFocus,
+    threeDigitsToad: win4Strategy.threeDigitToad,
+    cautionDoubles: win4Strategy.twoDigitDoubles,
+    luckyDayPlanetaryNumbers: win4Strategy.digits,
+    aiNarrative: `🔬 แผนลงทุนระบบวิน 4 ตัว [${lotteryMeta.name}] งวด ${drawDate} (${dayOfWeek}) จาก ${drawsPool.length} งวดล่าสุด:\n\n1. แกนเลขวิน 4 ตัวหลัก: [ ${win4Strategy.digits.join(' - ')} ]\n2. วิน 2 ตัว 12 หาง (ไม่เบิ้ล): ${win4Strategy.twoDigitNoDouble.join(' - ')}\n   • กันเบิ้ล 4 หาง (รวม 16 หาง): ${win4Strategy.twoDigitDoubles.join(' - ')}\n3. วิน 3 ตัวโต๊ด 4 ชุด (ประหยัดทุน): ${win4Strategy.threeDigitToad.join(' - ')}\n4. วิน 3 ตัวตรงเน้นสุด (8 หางจาก 24 หาง): ${win4Strategy.threeDigitStraightFocus.join(' - ')}\n5. เม็ดเดียว VIP ล็อคตำแหน่ง: '${vip3}' (ร้อย ${vip3[0]} · สิบ ${vip3[1]} · หน่วย ${vip3[2]})`,
     multiSourceSummary,
-    facebookCaption: `👑 ฟันธง 3 ตัวตรงๆ [${lotteryMeta.name}] งวด ${drawDate} (${dayOfWeek}) 👑\n📊 สังเคราะห์เข้มข้น ${totalSources} แหล่งข้อมูลดัง + สถิติ${lotteryMeta.shortName} ${drawsPool.length} งวด\n\n🎯 [เม็ดเดียว 3 ตัวตรง ฟันธงขาด]\n🔥🔥🔥 ${vip3} 🔥🔥🔥\n(ล็อคหลักร้อย ${vip3[0]} · หลักสิบ ${vip3[1]} · หลักหน่วย ${vip3[2]} | แต้มรวม ${calcSum(vip3)})\n\n👑 [3 ตัวตรงเน้นหนัก 3 ชุด]\n• ${coreStraightPicks.map((p) => p.number).join('  -  ')}\n🛡️ [3 ตัวตรงกันพลาด]\n• ${backupStraightPicks.map((p) => p.number).join('  -  ')}\n\n⚡ [เจาะ 2 ตัวบน-ล่าง ตัดเน้น]\n• วิ่ง-รูดตัวเดียว: [ ${r0} ] รอง [ ${r1} ]\n• 2 ตัวบน: ${dayData.top2.slice(0, 4).join(' - ')}\n• 2 ตัวล่าง: ${dayData.bottom2.slice(0, 4).join(' - ')}\n⚠️ ระวังเลขเบิ้ล: ${dayData.cautionDoubles.join(' - ')}\n\n#เลขเด็ด #3ตัวตรง #ฟันธง3ตัวตรง ${lotteryTag} #AIหวยแม่นยำ #สถิติหวย`,
+    facebookCaption: `🎯 แผนลงทุนวิน 4 ตัว [${lotteryMeta.name}] งวด ${drawDate} (${dayOfWeek})\n📊 คำนวณจากสถิติ${lotteryMeta.shortName} ${drawsPool.length} งวด + ${totalSources} แหล่ง\n\n🔥 แกนเลขวิน 4 ตัว: [ ${win4Strategy.digits.join(' - ')} ]\n💎 วิน 2 ตัว (12 หางไม่เบิ้ล):\n${win4Strategy.twoDigitNoDouble.join(' · ')}\n🛡️ กันเบิ้ล 4 หาง: ${win4Strategy.twoDigitDoubles.join(' · ')}\n\n👑 วิน 3 ตัวโต๊ด 4 ชุด: ${win4Strategy.threeDigitToad.join(' - ')}\n🎯 3 ตัวตรงเน้น: ${win4Strategy.threeDigitStraightFocus.slice(0, 4).join(' - ')}\n\n#วิน4ตัว #เลขเด็ดลงทุน #3ตัวโต๊ด ${lotteryTag} #AIหวยแม่นยำ`,
     generatedAt: new Date().toISOString()
   };
 }

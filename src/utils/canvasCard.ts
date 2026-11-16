@@ -172,17 +172,18 @@ export function renderLotteryCardToCanvas(
   ctx.textAlign = 'center';
   ctx.fillStyle = '#34d399';
   ctx.font = 'bold 24px "Prompt", sans-serif';
+  const win4DigitsText = (prediction.win4Strategy?.digits || prediction.luckyDayPlanetaryNumbers || []).slice(0, 4).join(' - ');
   ctx.fillText(
-    `ความแม่นยำฐานข้อมูลจริง: ${prediction.confidenceScore || 97}%  ·  โอกาสเข้าบน-ล่าง: ${prediction.dualHitProbability?.bothHitRate || 96.1}%`,
+    `🔥 แกนวิน 4 ตัวลงทุน: [ ${win4DigitsText} ]  ·  วิน 2 ตัว 12 หาง  ·  วิน 3 ตัว 4 โต๊ด`,
     width / 2,
     infoBoxY + 42
   );
 
-  const doubles = (prediction.cautionDoubles || []).join(' - ');
-  const toadList = (prediction.topSection?.threeDigitsToad || []).slice(0, 4).join(', ');
+  const doubles = (prediction.win4Strategy?.twoDigitDoubles || prediction.cautionDoubles || []).join(' - ');
+  const toadList = (prediction.win4Strategy?.threeDigitToad || prediction.topSection?.threeDigitsToad || []).slice(0, 4).join(', ');
   ctx.fillStyle = '#cbd5e1';
   ctx.font = '21px "Prompt", sans-serif';
-  ctx.fillText(`3 ตัวโต๊ดกันหลุด: ${toadList}   |   ⚠️ ระวังเลขเบิ้ล: ${doubles}`, width / 2, infoBoxY + 88);
+  ctx.fillText(`วิน 3 ตัวโต๊ด 4 ชุด: ${toadList}   |   กันเบิ้ล 4 หาง: ${doubles}`, width / 2, infoBoxY + 88);
 
   // Footer
   const footerY = 945;
