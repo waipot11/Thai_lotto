@@ -24,10 +24,12 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.resolve(__dirname, '.data');
+const DATA_DIR = process.env.VERCEL
+  ? path.join('/tmp', 'thai-lotto-data')
+  : path.resolve(__dirname, '.data');
 const STORE_FILE = path.join(DATA_DIR, 'app-store.json');
 
-const app = express();
+export const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '10mb' }));
@@ -1067,10 +1069,11 @@ app.all('/api/*', (req: Request, res: Response) => {
   res.status(404).json({ ok: false, error: `Unknown API route: ${req.path}` });
 });
 
-// Setup Vite in Dev or Static files in Prod
+// Setup Vite in Dev or Static files in Prod (skipped on Vercel serverless runtime)
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
+    const vitePkg = 'vite';
+    const { createServer: createViteServer } = await import(vitePkg);
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa'
@@ -1078,7 +1081,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static(path.resolve(__dirname, 'dist')));
-    app.get('*', (req: Request, res: Response) => {
+    app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
     });
   }
@@ -1090,4 +1093,8 @@ async function startServer() {
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
+
+export default app;
