@@ -6,7 +6,10 @@ import {
   CircuitBreakerState,
   DeepAnalysisSection4D,
   DigitFrequencyItem,
+  DualWindowMomentumSummary,
+  DualWindowPositionSummary,
   Filtered4DCandidate,
+  HedgingBreakdown,
   Lottery4DMeta,
   Lottery4DSourceEntry,
   Lottery4DType,
@@ -1137,8 +1140,152 @@ function compute22SourcesRawVotes(
   return { definitions, posVoteCounts, posWeightedVotes, planetary };
 }
 
+// Dual-Window Momentum Engine (Pure Math: 60% Last 7 Draws vs 40% 200-Draw Archive)
+function computeDualWindowMomentum(pool: LotteryDraw4D[]) {
+  const validPool = pool.filter((d) => /^\d{4}$/.test(d.number4D));
+  const window7 = validPool.slice(0, Math.min(7, validPool.length));
+  const window200 = validPool.slice(0, Math.min(200, validPool.length));
+  const len7 = Math.max(1, window7.length);
+  const len200 = Math.max(1, window200.length);
+  const positionNames = ['หลักพัน', 'หลักร้อย', 'หลักสิบ', 'หลักหน่วย'];
+
+  const posMetrics = ([0, 1, 2, 3] as const).map((posIdx) => {
+    const counts7 = Array(10).fill(0);
+    const counts200 = Array(10).fill(0);
+    const gap7 = Array(10).fill(99);
+    const gap200 = Array(10).fill(999);
+
+    window7.forEach((d, idx) => {
+      const dg = Number(d.number4D[posIdx]);
+      if (!Number.isNaN(dg)) {
+        counts7[dg]++;
+        if (gap7[dg] === 99) gap7[dg] = idx;
+      }
+    });
+
+    window200.forEach((d, idx) => {
+      const dg = Number(d.number4D[posIdx]);
+      if (!Number.isNaN(dg)) {
+        counts200[dg]++;
+        if (gap200[dg] === 999) gap200[dg] = idx;
+      }
+    });
+
+    const items = Array.from({ length: 10 }, (_, dNum) => {
+      const pct7 = (counts7[dNum] / len7) * 100;
+      const pct200 = (counts200[dNum] / len200) * 100;
+      const dualScore = pct7 * 0.6 + pct200 * 0.4;
+      return {
+        digit: String(dNum),
+        count7: counts7[dNum],
+        count200: counts200[dNum],
+        gap7: gap7[dNum],
+        gap200: gap200[dNum],
+        pct7,
+        pct200,
+        dualScore
+      };
+    });
+
+    const recent7Top3 = [...items]
+      .sort((a, b) => b.count7 - a.count7 || a.gap7 - b.gap7 || Number(a.digit) - Number(b.digit))
+      .slice(0, 3)
+      .map((x) => x.digit);
+
+    const long200Top3 = [...items]
+      .sort((a, b) => b.count200 - a.count200 || a.gap200 - b.gap200 || Number(a.digit) - Number(b.digit))
+      .slice(0, 3)
+      .map((x) => x.digit);
+
+    const anchorDigits = recent7Top3.filter((d) => long200Top3.includes(d));
+
+    return {
+      posIdx,
+      positionLabel: positionNames[posIdx],
+      items,
+      recent7Top3,
+      long200Top3,
+      anchorDigits
+    };
+  });
+
+  // Overall across all 4 positions (4 slots per draw)
+  const overallCounts7 = Array(10).fill(0);
+  const overallCounts200 = Array(10).fill(0);
+  const overallGap7 = Array(10).fill(99);
+  const overallGap200 = Array(10).fill(999);
+
+  window7.forEach((d, idx) => {
+    for (let p = 0; p < 4; p++) {
+      const dg = Number(d.number4D[p]);
+      if (!Number.isNaN(dg)) {
+        overallCounts7[dg]++;
+        if (overallGap7[dg] === 99) overallGap7[dg] = idx;
+      }
+    }
+  });
+
+  window200.forEach((d, idx) => {
+    for (let p = 0; p < 4; p++) {
+      const dg = Number(d.number4D[p]);
+      if (!Number.isNaN(dg)) {
+        overallCounts200[dg]++;
+        if (overallGap200[dg] === 999) overallGap200[dg] = idx;
+      }
+    }
+  });
+
+  const overallItems = Array.from({ length: 10 }, (_, dNum) => {
+    const pct7 = (overallCounts7[dNum] / (len7 * 4)) * 100;
+    const pct200 = (overallCounts200[dNum] / (len200 * 4)) * 100;
+    const dualScore = pct7 * 0.6 + pct200 * 0.4;
+    return {
+      digit: String(dNum),
+      count7: overallCounts7[dNum],
+      count200: overallCounts200[dNum],
+      gap7: overallGap7[dNum],
+      gap200: overallGap200[dNum],
+      pct7,
+      pct200,
+      dualScore
+    };
+  });
+
+  const recent7TopDigitsOverall = [...overallItems]
+    .sort((a, b) => b.count7 - a.count7 || a.gap7 - b.gap7 || Number(a.digit) - Number(b.digit))
+    .slice(0, 3)
+    .map((x) => x.digit);
+
+  const long200TopDigitsOverall = [...overallItems]
+    .sort((a, b) => b.count200 - a.count200 || a.gap200 - b.gap200 || Number(a.digit) - Number(b.digit))
+    .slice(0, 3)
+    .map((x) => x.digit);
+
+  const anchorDigitsOverall = recent7TopDigitsOverall.filter((d) =>
+    long200TopDigitsOverall.includes(d)
+  );
+
+  const anchorDigitsByPos: [string[], string[], string[], string[]] = [
+    posMetrics[0].anchorDigits,
+    posMetrics[1].anchorDigits,
+    posMetrics[2].anchorDigits,
+    posMetrics[3].anchorDigits
+  ];
+
+  return {
+    recentWindowDraws: window7.length,
+    longWindowDraws: window200.length,
+    posMetrics,
+    overallItems,
+    recent7TopDigitsOverall,
+    long200TopDigitsOverall,
+    anchorDigitsOverall,
+    anchorDigitsByPos
+  };
+}
+
 // Helper: Score every digit 0-9 at each of the 4 positions using ONLY prior draws (zero look-ahead)
-// Fuses Per-Lottery Regime Tuning + 200-draw positional stats + Adaptive 22-source consensus + Markov Pair Affinity
+// Fuses Dual-Window Momentum (60% Last 7 Draws + 40% 200 Draws) + Adaptive 22-source consensus + Markov Pair Affinity
 function scoreDigitsForSniper4D(
   historyDraws: LotteryDraw4D[],
   lotteryType: Lottery4DType = 'lao',
@@ -1147,9 +1294,9 @@ function scoreDigitsForSniper4D(
 ) {
   const pool = historyDraws;
   const tuning = LOTTERY_TUNING_PROFILE[lotteryType];
-  const recentWindow = pool.slice(0, tuning.recentWindowSize);
   const immediatePrev = pool[0]?.number4D || '';
   const stats = computePositional4DStats(pool);
+  const dualWindow = computeDualWindowMomentum(pool);
   const markov = computeMarkovPairAffinity(pool, tuning.recentWindowSize);
   const { definitions, posVoteCounts, posWeightedVotes, planetary } = compute22SourcesRawVotes(
     pool,
@@ -1161,18 +1308,16 @@ function scoreDigitsForSniper4D(
 
   const rankedByPos = ([0, 1, 2, 3] as const).map((posIdx) => {
     const posStat = stats.positions[posIdx];
-    const recentFreq = Array(10).fill(0);
-    recentWindow.forEach((d, idx) => {
-      const dg = Number(d.number4D[posIdx]);
-      if (!Number.isNaN(dg)) {
-        recentFreq[dg] += idx < tuning.sharpMomentumDraws ? 2.2 : 1.3;
-      }
-    });
+    const posAnchors = dualWindow.anchorDigitsByPos[posIdx];
+    const dwItems = dualWindow.posMetrics[posIdx].items;
 
     const scored = posStat.digits.map((item) => {
       const dNum = Number(item.digit);
-      const fullScore = item.percentage * tuning.fullScoreWeight;
-      const momScore = recentFreq[dNum] * tuning.momentumWeight;
+      const dw = dwItems[dNum];
+      // Pure Math Dual-Window Split: 60% Last 7 Draws + 40% 200-Draw Structural Baseline
+      const dualWindowScore = (dw.pct7 * 0.6 + dw.pct200 * 0.4) * 1.25;
+      const isAnchor = posAnchors.includes(item.digit);
+      const anchorBonus = isAnchor ? 4.5 : 0;
       const gapBonus =
         item.gapDraws >= tuning.gapThreshold
           ? Math.min(8, (item.gapDraws - (tuning.gapThreshold - 1)) * 1.1)
@@ -1182,17 +1327,19 @@ function scoreDigitsForSniper4D(
       const consensusBonus = posWeightedVotes[posIdx][dNum] * tuning.consensusWeight;
       return {
         digit: item.digit,
-        score: fullScore + momScore + gapBonus + repeatPenalty + outlierBonus + consensusBonus,
+        score: dualWindowScore + anchorBonus + gapBonus + repeatPenalty + outlierBonus + consensusBonus,
+        dualScore: dw.dualScore,
+        isAnchor,
         isHotOutlier: item.isHotOutlier,
         ratioToAvg: item.ratioToAvg,
         votes22: posVoteCounts[posIdx][dNum]
       };
     });
 
-    return scored.sort((a, b) => b.score - a.score);
+    return scored.sort((a, b) => b.score - a.score || b.dualScore - a.dualScore || Number(a.digit) - Number(b.digit));
   });
 
-  return { stats, rankedByPos, immediatePrev, definitions, posVoteCounts, planetary, markov, tuning };
+  return { stats, dualWindow, rankedByPos, immediatePrev, definitions, posVoteCounts, planetary, markov, tuning };
 }
 
 // 2. Confidence-Weighted Diverse Sniper Sets (Requirement Safeguard #2)
@@ -1208,6 +1355,8 @@ export function generateConfidenceWeightedSniper4D(
   sniperSets: Sniper4DSet[];
   superNumber4D: string;
   win4Breakdown: Win4StrategyBreakdown;
+  dualWindowMomentum: DualWindowMomentumSummary;
+  hedgingBreakdown: HedgingBreakdown;
   backupThreeToad: string[];
   backupTwoBack: string[];
   hotOutliersSummary: { positionLabel: string; digit: string; ratioToAvg: number }[];
@@ -1217,7 +1366,7 @@ export function generateConfidenceWeightedSniper4D(
   deepAnalysis: DeepAnalysisSection4D;
   rawSourceDigits22: [string, string, string, string][];
 } {
-  const { stats, rankedByPos, immediatePrev, definitions, posVoteCounts, planetary, markov, tuning } =
+  const { stats, dualWindow, rankedByPos, immediatePrev, definitions, posVoteCounts, planetary, markov, tuning } =
     scoreDigitsForSniper4D(historyDraws, lotteryType, dayOfWeek, adaptiveMultipliers);
   const positionNames = ['หลักพัน', 'หลักร้อย', 'หลักสิบ', 'หลักหน่วย'];
 
@@ -1236,23 +1385,24 @@ export function generateConfidenceWeightedSniper4D(
 
   // Track usage count per position across the 4 Sniper Sets
   const usedPosCounts: Record<string, number>[] = [{}, {}, {}, {}];
-  const sniperSets: Sniper4DSet[] = [];
+  const rawSetDigits: [string, string, string, string][] = [];
   const chosen4Ds = new Set<string>();
 
   for (let setIdx = 0; setIdx < 4; setIdx++) {
     const digits: string[] = [];
-    const outlierNotes: string[] = [];
 
     for (let pos = 0; pos < 4; pos++) {
       const candidates = rankedByPos[pos];
       const outlier = hotOutliersPerPos[pos];
+      const posAnchors = dualWindow.anchorDigitsByPos[pos];
 
-      // Sort eligible candidates dynamically incorporating Markov transition affinity from previous digit
       const prevDigitNum = pos > 0 ? Number(digits[pos - 1]) : -1;
       const eligible = candidates
         .filter((cand) => {
           const currentUses = usedPosCounts[pos][cand.digit] || 0;
-          const maxAllowed = outlier && cand.digit === outlier.digit ? 2 : 1;
+          const isAnchorOrOutlier =
+            (outlier && cand.digit === outlier.digit) || posAnchors.includes(cand.digit);
+          const maxAllowed = isAnchorOrOutlier ? 2 : 1;
           if (currentUses >= maxAllowed) return false;
           if (pos === 3) {
             const fullNum = `${digits.join('')}${cand.digit}`;
@@ -1267,26 +1417,26 @@ export function generateConfidenceWeightedSniper4D(
             const mat = pos === 1 ? markov.norm01 : pos === 2 ? markov.norm12 : markov.norm23;
             pairLift = mat[prevDigitNum][cNum] * tuning.markovWeight;
           }
-          return { cand, combined: cand.score + pairLift };
+          const primaryAnchorBoost =
+            setIdx < 2 && posAnchors[0] === cand.digit && (usedPosCounts[pos][cand.digit] || 0) < 2
+              ? 6.0
+              : 0;
+          return { cand, combined: cand.score + pairLift + primaryAnchorBoost };
         })
         .sort((a, b) => b.combined - a.combined);
 
       const picked = eligible.length > 0 ? eligible[0].cand : candidates[0];
-
       digits.push(picked.digit);
       usedPosCounts[pos][picked.digit] = (usedPosCounts[pos][picked.digit] || 0) + 1;
-
-      if (outlier && picked.digit === outlier.digit) {
-        outlierNotes.push(`${positionNames[pos]} ${picked.digit} (Hot Outlier ${outlier.ratioToAvg}x)`);
-      }
     }
 
-    let number4D = digits.join('');
+    let finalDigits = [...digits] as [string, string, string, string];
+    let number4D = finalDigits.join('');
     if (chosen4Ds.has(number4D) || number4D === immediatePrev) {
-      // Shift unit digit deterministically to guarantee uniqueness
       for (const alt of rankedByPos[3]) {
-        const altNum = `${digits[0]}${digits[1]}${digits[2]}${alt.digit}`;
+        const altNum = `${finalDigits[0]}${finalDigits[1]}${finalDigits[2]}${alt.digit}`;
         if (!chosen4Ds.has(altNum) && altNum !== immediatePrev) {
+          finalDigits[3] = alt.digit;
           number4D = altNum;
           break;
         }
@@ -1294,13 +1444,146 @@ export function generateConfidenceWeightedSniper4D(
     }
 
     chosen4Ds.add(number4D);
+    rawSetDigits.push(finalDigits);
+  }
+
+  // Enforce Anchor Digit Lock: every primary positional anchor (Top 3 in BOTH 7-draw & 200-draw)
+  // MUST appear in >= 2 of the 4 elite sets, while keeping all 4 sets unique.
+  const lockedAnchorPositions = new Set<string>(); // `${setIdx}:${pos}`
+  for (let pos = 0; pos < 4; pos++) {
+    const primaryAnchor = dualWindow.anchorDigitsByPos[pos][0];
+    if (!primaryAnchor) continue;
+
+    let countAtPos = rawSetDigits.filter((d) => d[pos] === primaryAnchor).length;
+    for (let sIdx = 0; sIdx < rawSetDigits.length && countAtPos < 2; sIdx++) {
+      if (rawSetDigits[sIdx][pos] === primaryAnchor) {
+        lockedAnchorPositions.add(`${sIdx}:${pos}`);
+        continue;
+      }
+      const backupOld = rawSetDigits[sIdx][pos];
+      rawSetDigits[sIdx][pos] = primaryAnchor;
+      const candidateStr = rawSetDigits[sIdx].join('');
+      const hasDuplicate = rawSetDigits.some((other, oIdx) => oIdx !== sIdx && other.join('') === candidateStr);
+      if (!hasDuplicate && candidateStr !== immediatePrev) {
+        lockedAnchorPositions.add(`${sIdx}:${pos}`);
+        countAtPos++;
+      } else {
+        // Resolve collision on a non-locked position deterministically
+        let resolved = false;
+        for (const altPos of [3, 2, 1, 0]) {
+          if (altPos === pos || lockedAnchorPositions.has(`${sIdx}:${altPos}`)) continue;
+          const prevVal = rawSetDigits[sIdx][altPos];
+          for (const altCand of rankedByPos[altPos]) {
+            rawSetDigits[sIdx][altPos] = altCand.digit;
+            const resolvedStr = rawSetDigits[sIdx].join('');
+            const stillDup = rawSetDigits.some((other, oIdx) => oIdx !== sIdx && other.join('') === resolvedStr);
+            if (!stillDup && resolvedStr !== immediatePrev) {
+              resolved = true;
+              break;
+            }
+          }
+          if (resolved) break;
+          rawSetDigits[sIdx][altPos] = prevVal;
+        }
+        if (resolved) {
+          lockedAnchorPositions.add(`${sIdx}:${pos}`);
+          countAtPos++;
+        } else {
+          rawSetDigits[sIdx][pos] = backupOld;
+        }
+      }
+    }
+    rawSetDigits.forEach((d, sIdx) => {
+      if (d[pos] === primaryAnchor) lockedAnchorPositions.add(`${sIdx}:${pos}`);
+    });
+  }
+
+  // Enforce Overall Anchor Digits (Top 3 in BOTH 7-draw & 200-draw overall) appear in >= 2 of the 4 elite sets
+  for (const overallAnchor of dualWindow.anchorDigitsOverall) {
+    let overallCount = rawSetDigits.filter((d) => d.includes(overallAnchor)).length;
+    if (overallCount >= 2) continue;
+
+    const bestPosOrder = ([0, 1, 2, 3] as const)
+      .map((p) => ({
+        p,
+        sc: rankedByPos[p].find((x) => x.digit === overallAnchor)?.score || 0
+      }))
+      .sort((a, b) => b.sc - a.sc)
+      .map((x) => x.p);
+
+    for (let sIdx = 0; sIdx < rawSetDigits.length && overallCount < 2; sIdx++) {
+      if (rawSetDigits[sIdx].includes(overallAnchor)) continue;
+      let placed = false;
+      for (const p of bestPosOrder) {
+        if (lockedAnchorPositions.has(`${sIdx}:${p}`)) continue;
+        const oldVal = rawSetDigits[sIdx][p];
+        rawSetDigits[sIdx][p] = overallAnchor;
+        const candStr = rawSetDigits[sIdx].join('');
+        const dup = rawSetDigits.some((other, oIdx) => oIdx !== sIdx && other.join('') === candStr);
+        if (!dup && candStr !== immediatePrev) {
+          placed = true;
+          overallCount++;
+          break;
+        }
+        rawSetDigits[sIdx][p] = oldVal;
+      }
+      if (placed) continue;
+    }
+  }
+
+  const sniperSets: Sniper4DSet[] = rawSetDigits.map((digitsArr, setIdx) => {
+    const number4D = digitsArr.join('');
+    const outlierNotes: string[] = [];
+    const anchorDigitNotes: string[] = [];
+
+    for (let pos = 0; pos < 4; pos++) {
+      const dg = digitsArr[pos];
+      const outlier = hotOutliersPerPos[pos];
+      if (outlier && dg === outlier.digit) {
+        outlierNotes.push(`${positionNames[pos]} ${dg} (Hot Outlier ${outlier.ratioToAvg}x)`);
+      }
+      if (dualWindow.anchorDigitsByPos[pos].includes(dg)) {
+        anchorDigitNotes.push(`ยืนพื้น${positionNames[pos]} ${dg}`);
+      }
+    }
+    dualWindow.anchorDigitsOverall.forEach((oa) => {
+      if (digitsArr.includes(oa) && !anchorDigitNotes.some((n) => n.endsWith(` ${oa}`))) {
+        anchorDigitNotes.push(`ยืนพื้นรวม ${oa}`);
+      }
+    });
+
     const sum = get4DSum(number4D);
     const eo = get4DEvenOddRatio(number4D);
     const hl = get4DHighLowRatio(number4D);
     const inOptimalSum = sum >= stats.optimalSumMin && sum <= stats.optimalSumMax;
-    const confidence = Math.max(76, Math.min(96, Math.round(94 - setIdx * 3.5 + (inOptimalSum ? 2 : 0) + (outlierNotes.length > 0 ? 2 : 0))));
+    const isAnchorLocked = anchorDigitNotes.length > 0;
+    const confidence = Math.max(
+      76,
+      Math.min(
+        96,
+        Math.round(
+          94 -
+            setIdx * 3.5 +
+            (inOptimalSum ? 2 : 0) +
+            (outlierNotes.length > 0 ? 1.5 : 0) +
+            (isAnchorLocked ? 1.5 : 0)
+        )
+      )
+    );
 
-    sniperSets.push({
+    const rationaleParts: string[] = [];
+    if (anchorDigitNotes.length > 0) {
+      rationaleParts.push(`ล็อกเลขยืนพื้น 7/200 (${anchorDigitNotes.join(', ')})`);
+    }
+    if (outlierNotes.length > 0) {
+      rationaleParts.push(`ยึดเลขไหลเด่น ${outlierNotes.join(', ')}`);
+    }
+    if (rationaleParts.length === 0) {
+      rationaleParts.push(`ชุดกระจายตำแหน่ง Dual-Window 60/40 · คู่:คี่ ${eo}`);
+    }
+    rationaleParts.push(`แต้มรวม ${sum}`);
+
+    return {
       rank: setIdx + 1,
       number4D,
       confidence,
@@ -1309,15 +1592,78 @@ export function generateConfidenceWeightedSniper4D(
       highLowRatio: hl,
       isHotOutlierAnchored: outlierNotes.length > 0,
       outlierNotes,
-      rationale:
-        outlierNotes.length > 0
-          ? `ยึดเลขไหลเด่น ${outlierNotes.join(', ')} + กระจายตำแหน่งอื่นไม่ซ้ำ · แต้มรวม ${sum}`
-          : `ชุดกระจายตำแหน่ง 100% (Diverse Sniper) · สัดส่วนคู่:คี่ ${eo} · แต้มรวม ${sum}`
-    });
-  }
+      isAnchorDigitLocked: isAnchorLocked,
+      anchorDigitNotes,
+      rationale: rationaleParts.join(' · ')
+    };
+  });
 
   const superNumber4D = sniperSets[0]?.number4D || '4286';
   const sortStr = (s: string) => s.split('').sort().join('');
+  const uniqueOrdered = (arr: string[]) => Array.from(new Set(arr));
+
+  // Hedging Breakdown (แตกชุดกันทุน) extracted deterministically from the 4 elite sets
+  const threeDigitFront = uniqueOrdered(sniperSets.map((s) => s.number4D.slice(0, 3)));
+  const threeDigitBack = uniqueOrdered(sniperSets.map((s) => s.number4D.slice(-3)));
+  const threeDigitAllUnique = uniqueOrdered([...threeDigitFront, ...threeDigitBack]);
+  const twoDigitFront = uniqueOrdered(sniperSets.map((s) => s.number4D.slice(0, 2)));
+  const twoDigitBack = uniqueOrdered(sniperSets.map((s) => s.number4D.slice(-2)));
+  const twoDigitAllUnique = uniqueOrdered([...twoDigitFront, ...twoDigitBack]);
+
+  const hedgingBreakdown: HedgingBreakdown = {
+    threeDigitFront,
+    threeDigitBack,
+    threeDigitAllUnique,
+    twoDigitFront,
+    twoDigitBack,
+    twoDigitAllUnique
+  };
+
+  const perPositionSummary = ([0, 1, 2, 3] as const).map((posIdx): DualWindowPositionSummary => {
+    const pm = dualWindow.posMetrics[posIdx];
+    const anchorSet = new Set(pm.anchorDigits);
+    const lockedSetCount =
+      anchorSet.size > 0
+        ? sniperSets.filter((s) => anchorSet.has(s.number4D[posIdx])).length
+        : 0;
+    return {
+      positionIndex: posIdx,
+      positionLabel: pm.positionLabel,
+      recent7Top3: pm.recent7Top3,
+      long200Top3: pm.long200Top3,
+      anchorDigits: pm.anchorDigits,
+      lockedSetCount
+    };
+  }) as [
+    DualWindowPositionSummary,
+    DualWindowPositionSummary,
+    DualWindowPositionSummary,
+    DualWindowPositionSummary
+  ];
+
+  const allAnchoredLabels = [
+    ...dualWindow.anchorDigitsOverall.map((d) => `รวม:${d}`),
+    ...perPositionSummary.flatMap((p) =>
+      p.anchorDigits.map((d) => `${p.positionLabel}:${d} (${p.lockedSetCount}/4 ชุด)`)
+    )
+  ];
+
+  const dualWindowMomentum: DualWindowMomentumSummary = {
+    recentWindowDraws: dualWindow.recentWindowDraws,
+    longWindowDraws: dualWindow.longWindowDraws,
+    recentWeightPct: 60,
+    longWeightPct: 40,
+    recent7TopDigitsOverall: dualWindow.recent7TopDigitsOverall,
+    long200TopDigitsOverall: dualWindow.long200TopDigitsOverall,
+    anchorDigitsOverall: dualWindow.anchorDigitsOverall,
+    anchorDigitsByPos: dualWindow.anchorDigitsByPos,
+    perPositionSummary,
+    summaryNote:
+      allAnchoredLabels.length > 0
+        ? `คำนวณ Dual-Window (60% จาก ${dualWindow.recentWindowDraws} งวดล่าสุด + 40% จาก ${dualWindow.longWindowDraws} งวด) · ล็อกเลขยืนพื้น: ${allAnchoredLabels.join(' · ')}`
+        : `คำนวณ Dual-Window (60% จาก ${dualWindow.recentWindowDraws} งวดล่าสุด + 40% จาก ${dualWindow.longWindowDraws} งวด) · ไม่มีเลขชน Top 3 ซ้ำทั้ง 2 หน้าต่าง (ใช้คะแนน 60/40 ถ่วงเต็ม)`
+  };
+
   const backupThreeToad = Array.from(
     new Set(sniperSets.map((s) => sortStr(s.number4D.slice(-3))))
   ).slice(0, 4);
@@ -1421,7 +1767,7 @@ export function generateConfidenceWeightedSniper4D(
     dayOfWeekTitle: planetary.label,
     dayPlanetaryDigits: planetary.digits,
     dayOfWeekSummary: `ตามกำลังวัน${dayOfWeek} (${planetary.elementNote}) เลขเด่นประจำวันคือ ${planetary.digits.join(' - ')} เมื่อนำมาเทียบกับสถิติ ${stats.totalDraws} งวดของ${metaName} พบจังหวะเลขสอดคล้องกันอย่างชัดเจน`,
-    regimeTrendSummary: `โครงสร้างผลรวมเลข 4 หลักยอดนิยมอยู่ในช่วง ${stats.optimalSumMin}–${stats.optimalSumMax} (เข้าเป้า ${stats.optimalSumHitRate}%) · โหมดจูนเฉพาะหวย: ${tuning.label} · โซนผลรวม 3 ตัวท้ายเด่น ${markov.optimal3DSumMin}–${markov.optimal3DSumMax}`,
+    regimeTrendSummary: `Dual-Window Momentum (60% จาก ${dualWindow.recentWindowDraws} งวดล่าสุด + 40% จาก ${dualWindow.longWindowDraws} งวด) · ผลรวม 4 หลักเด่น ${stats.optimalSumMin}–${stats.optimalSumMax} (เข้าเป้า ${stats.optimalSumHitRate}%) · โซนผลรวม 3 ตัวท้ายเด่น ${markov.optimal3DSumMin}–${markov.optimal3DSumMax}`,
     consensusVerdict: `เมื่อนำเลขทั้ง 22 แหล่งข้อมูลมาชนกันแยกทีละตำแหน่ง พบความเห็นพ้องสูงสุดคือ หลักพัน "${positionalLeaders[0].topDigit}" (${positionalLeaders[0].votesOutOf22}/22 แหล่ง) · หลักร้อย "${positionalLeaders[1].topDigit}" (${positionalLeaders[1].votesOutOf22}/22 แหล่ง) · หลักสิบ "${positionalLeaders[2].topDigit}" (${positionalLeaders[2].votesOutOf22}/22 แหล่ง) · หลักหน่วย "${positionalLeaders[3].topDigit}" (${positionalLeaders[3].votesOutOf22}/22 แหล่ง) ได้ข้อสรุป Super Number 4 ตัวเม็ดเดียวคือ [ ${superNumber4D} ]`,
     adaptiveSummary: `ระบบปรับน้ำหนัก 22 แหล่งอัตโนมัติ (Walk-Forward Adaptive) เพิ่มแรงให้สายที่แม่นสุดล่าสุด: ${topAdaptiveSources.join(' · ')}`,
     markovTopPairs: markov.topPairs,
@@ -1430,16 +1776,30 @@ export function generateConfidenceWeightedSniper4D(
   };
 
   // Build Win-4 Core Digits & 3-Digit Splits (for ธ.ก.ส. and ออมสิน investment mode)
+  // Combines 60% 7-draw / 40% 200-draw overall Dual-Window score with positional + 22-source scores
   const digitAggregateScores = Array.from({ length: 10 }, (_, dNum) => {
     const dStr = String(dNum);
     const s1 = rankedByPos[1].find((x) => x.digit === dStr)?.score || 0;
     const s2 = rankedByPos[2].find((x) => x.digit === dStr)?.score || 0;
     const s3 = rankedByPos[3].find((x) => x.digit === dStr)?.score || 0;
     const s0 = rankedByPos[0].find((x) => x.digit === dStr)?.score || 0;
-    return { digit: dStr, totalScore: s1 * 1.2 + s2 * 1.25 + s3 * 1.25 + s0 * 0.7 };
+    const dwOverall = dualWindow.overallItems[dNum]?.dualScore || 0;
+    const isAnchorOverall = dualWindow.anchorDigitsOverall.includes(dStr);
+    return {
+      digit: dStr,
+      isAnchorOverall,
+      totalScore: s1 * 1.15 + s2 * 1.2 + s3 * 1.2 + s0 * 0.65 + dwOverall * 1.5 + (isAnchorOverall ? 25 : 0)
+    };
   }).sort((a, b) => b.totalScore - a.totalScore);
 
-  const coreDigits4 = digitAggregateScores.slice(0, 4).map((x) => x.digit);
+  // Guarantee every Overall Anchor Digit sits inside coreDigits4 (thus appearing in 3 out of 4 focus sets >= 2)
+  const coreDigits4: string[] = [];
+  for (const oa of dualWindow.anchorDigitsOverall) {
+    if (!coreDigits4.includes(oa) && coreDigits4.length < 4) coreDigits4.push(oa);
+  }
+  for (const item of digitAggregateScores) {
+    if (!coreDigits4.includes(item.digit) && coreDigits4.length < 4) coreDigits4.push(item.digit);
+  }
 
   // Score any 3-digit permutation using Positional Scores + Markov Pair Affinity (ร้อย->สิบ, สิบ->หน่วย, ร้อย->หน่วย) + 3D Optimal Sum Zone
   const getPosScore = (posIdx: 1 | 2 | 3, dg: string) =>
@@ -1576,6 +1936,8 @@ export function generateConfidenceWeightedSniper4D(
     sniperSets,
     superNumber4D,
     win4Breakdown,
+    dualWindowMomentum,
+    hedgingBreakdown,
     backupThreeToad,
     backupTwoBack,
     hotOutliersSummary,
@@ -2115,6 +2477,8 @@ export function build4DPredictionSummary(
     superNumber4D: sniperData.superNumber4D,
     sniperSets: sniperData.sniperSets,
     win4Breakdown: sniperData.win4Breakdown,
+    dualWindowMomentum: sniperData.dualWindowMomentum,
+    hedgingBreakdown: sniperData.hedgingBreakdown,
     backupThreeToad: sniperData.backupThreeToad,
     backupTwoBack: sniperData.backupTwoBack,
     hotOutliersSummary: sniperData.hotOutliersSummary,
@@ -2129,8 +2493,8 @@ export function build4DPredictionSummary(
     deepAnalysis: sniperData.deepAnalysis,
     narrative:
       meta.strategyMode === 'win4_3d'
-        ? `สังเคราะห์ครบ ${sniperData.sources22.length} แหล่ง + สถิติ ${validDraws.length} งวด (${meta.name}) · แกนวิน 4 ตัว [ ${sniperData.win4Breakdown.coreDigits4.join(' - ')} ] แตก 3 ตัวตรง 24 ชุด เล่นร่วมกับ 4 ชุดเน้น (เม็ดเดียว ${sniperData.win4Breakdown.megaThreeStraight}) · สถานะพอร์ต: ${cb.statusBadgeText}`
-        : `สังเคราะห์ครบ ${sniperData.sources22.length} แหล่งข้อมูลร่วมกับสถิติ ${validDraws.length} งวด (${meta.name}) · Super Number 4 ตัวเม็ดเดียว: ${sniperData.superNumber4D} (ชนเฉลี่ย ${sniperData.deepAnalysis.averageAgreementOutOf22}/22 แหล่ง) · สถานะพอร์ต: ${cb.statusBadgeText}`,
+        ? `สังเคราะห์ Pure Math 100% (${sniperData.sources22.length} แหล่ง · Dual-Window 60/40) · แกนวิน 4 ตัว [ ${sniperData.win4Breakdown.coreDigits4.join(' - ')} ] แตก 3 ตัวตรง 24 ชุด & 4 ชุดเน้น (${sniperData.win4Breakdown.megaThreeStraight}) · สถานะพอร์ต: ${cb.statusBadgeText}`
+        : `สังเคราะห์ Pure Math 100% (${sniperData.sources22.length} แหล่ง · Dual-Window 60/40) · Super Number 4D: ${sniperData.superNumber4D} (ชนเฉลี่ย ${sniperData.deepAnalysis.averageAgreementOutOf22}/22 แหล่ง) · สถานะพอร์ต: ${cb.statusBadgeText}`,
     generatedAt: new Date().toISOString()
   };
 }

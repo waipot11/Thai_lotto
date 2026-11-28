@@ -1331,13 +1331,28 @@ async function runTelegramPreDrawTick(): Promise<{
           ? `🟡 สถานะ: เกาะกลุ่ม Near-Miss · ลดงบเหลือ 1 ชุดเม็ดเดียว (120 บ.) + ประคอง 2 ตัว: ${pred.backupTwoBack.slice(0, 3).join(', ')}`
           : `🟢 สถานะ: ปกติ · เต็มพอร์ต 4 ชุด (480 บ.)`;
 
+    const dw = pred.dualWindowMomentum;
+    const anchorLabels = dw
+      ? [
+          ...dw.anchorDigitsOverall.map((d) => `รวม:${d}`),
+          ...dw.perPositionSummary.flatMap((p) => p.anchorDigits.map((d) => `${p.positionLabel}:${d}`))
+        ]
+      : [];
+    const anchorLine =
+      anchorLabels.length > 0 ? `\n📍 เลขยืนพื้น Dual-Window (60/40): ${anchorLabels.join(' · ')}` : '';
+    const hb = pred.hedgingBreakdown;
+
     if (isWin4Mode) {
       const all24 = pred.win4Breakdown.threeDigitStraight24Sets || [];
       const hedge = pred.win4Breakdown.threeDigitDoubleHedgeSets || [];
-      return `📌 [${meta.name} · ออกเวลา ${meta.drawTimeLabel}]\n🗓️ งวด ${info.drawDateStr} (${info.dayOfWeek})\n🔥 แกนวิน 4 ตัว: [ ${pred.win4Breakdown.coreDigits4.join(' - ')} ]\n👑 4 ชุดเน้น (เม็ดเดียว ${pred.win4Breakdown.megaThreeStraight}): ${pred.win4Breakdown.threeDigitStraightSets.join(' · ')} (ชนเฉลี่ย ${pred.deepAnalysis?.averageAgreementOutOf22 || 0}/22 แหล่ง)\n🎯 แตก 3 ตัว 24 ชุด: ${all24.join(' · ')}\n🛡️ 3 ตัวโต๊ด 4 ชุด: ${pred.win4Breakdown.threeDigitToadSets.join(' · ')}${hedge.length > 0 ? `\n⚡ กันเบิ้ล/หาม 4 ชุด: ${hedge.join(' · ')}` : ''}\n${statusLine}`;
+      return `📌 [${meta.name} · ออกเวลา ${meta.drawTimeLabel}]\n🗓️ งวด ${info.drawDateStr} (${info.dayOfWeek})${anchorLine}\n🔥 แกนวิน 4 ตัว: [ ${pred.win4Breakdown.coreDigits4.join(' - ')} ]\n👑 4 ชุดเน้น (เม็ดเดียว ${pred.win4Breakdown.megaThreeStraight}): ${pred.win4Breakdown.threeDigitStraightSets.join(' · ')} (ชนเฉลี่ย ${pred.deepAnalysis?.averageAgreementOutOf22 || 0}/22 แหล่ง)\n🎯 แตก 3 ตัว 24 ชุด: ${all24.join(' · ')}\n🛡️ 3 ตัวโต๊ด 4 ชุด: ${pred.win4Breakdown.threeDigitToadSets.join(' · ')}${hedge.length > 0 ? `\n⚡ กันเบิ้ล/หาม 4 ชุด: ${hedge.join(' · ')}` : ''}\n${statusLine}`;
     }
 
-    return `📌 [${meta.name} · ออกเวลา ${meta.drawTimeLabel}]\n🗓️ งวด ${info.drawDateStr} (${info.dayOfWeek})\n👑 Super Number 4 ตัว: [ ${pred.superNumber4D} ] (ชนเฉลี่ย ${pred.deepAnalysis?.averageAgreementOutOf22 || 0}/${pred.totalSourcesAnalyzed || 22} แหล่ง)\n🎯 Diverse Sniper Sets: ${sniperList.join(' · ')}\n🛡️ 3 โต๊ด / 2 ตัวท้าย: ${pred.backupThreeToad.slice(0, 3).join(', ')} / ${pred.backupTwoBack.slice(0, 4).join(', ')}\n${statusLine}`;
+    const hedgeBlock = hb
+      ? `\n🛡️ แตกชุดกันทุน:\n   • 3 ตัวหน้า: ${hb.threeDigitFront.join(' · ')} | 3 ตัวหลัง: ${hb.threeDigitBack.join(' · ')}\n   • 2 ตัวหน้า: ${hb.twoDigitFront.join(' · ')} | 2 ตัวท้าย: ${hb.twoDigitBack.join(' · ')}`
+      : `\n🛡️ 3 โต๊ด / 2 ตัวท้าย: ${pred.backupThreeToad.slice(0, 3).join(', ')} / ${pred.backupTwoBack.slice(0, 4).join(', ')}`;
+
+    return `📌 [${meta.name} · ออกเวลา ${meta.drawTimeLabel}]\n🗓️ งวด ${info.drawDateStr} (${info.dayOfWeek})${anchorLine}\n👑 Super Number 4 ตัว: [ ${pred.superNumber4D} ] (ชนเฉลี่ย ${pred.deepAnalysis?.averageAgreementOutOf22 || 0}/${pred.totalSourcesAnalyzed || 22} แหล่ง)\n🎯 ชุดหัวกะทิ 4D (Dual-Window 60/40): ${sniperList.join(' · ')}${hedgeBlock}\n${statusLine}`;
   });
 
   const leadMinutes = Math.min(240, Math.max(15, Number(telegramConfig.minutesBeforeDraw) || 90));

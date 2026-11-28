@@ -139,19 +139,32 @@ export function renderLotteryCardToCanvas(
   } else {
     ctx.fillStyle = '#38bdf8';
     ctx.font = 'bold 26px "Prompt", sans-serif';
-    ctx.fillText('4 ชุด Diverse Sniper (Confidence-Weighted)', width / 2, setsY + 44);
+    ctx.fillText('4 ชุดหัวกะทิ Dual-Window (60% 7 งวด : 40% 200 งวด)', width / 2, setsY + 38);
 
     const sniperLine = prediction.sniperSets.map((s) => s.number4D).join('    ·    ');
     ctx.fillStyle = '#f8fafc';
-    ctx.font = 'bold 46px "JetBrains Mono", "Prompt", monospace';
-    ctx.fillText(sniperLine, width / 2, setsY + 112);
+    ctx.font = 'bold 44px "JetBrains Mono", "Prompt", monospace';
+    ctx.fillText(sniperLine, width / 2, setsY + 96);
 
+    const hb = prediction.hedgingBreakdown;
     ctx.fillStyle = '#a7f3d0';
-    ctx.font = '23px "Prompt", sans-serif';
+    ctx.font = '20px "Prompt", sans-serif';
     ctx.fillText(
-      `3 ตัวโต๊ดกันพลาด: ${prediction.backupThreeToad.join(' · ')}   |   2 ตัวท้ายประคอง: ${prediction.backupTwoBack.slice(0, 4).join(' · ')}`,
+      hb
+        ? `3 หน้า: ${hb.threeDigitFront.join(' · ')}   |   3 หลัง: ${hb.threeDigitBack.join(' · ')}`
+        : `3 ตัวโต๊ดกันพลาด: ${prediction.backupThreeToad.join(' · ')}`,
       width / 2,
-      setsY + 168
+      setsY + 144
+    );
+
+    ctx.fillStyle = '#fde68a';
+    ctx.font = '20px "Prompt", sans-serif';
+    ctx.fillText(
+      hb
+        ? `2 หน้า: ${hb.twoDigitFront.join(' · ')}   |   2 ท้าย: ${hb.twoDigitBack.join(' · ')}`
+        : `2 ตัวท้ายประคอง: ${prediction.backupTwoBack.slice(0, 4).join(' · ')}`,
+      width / 2,
+      setsY + 180
     );
   }
 

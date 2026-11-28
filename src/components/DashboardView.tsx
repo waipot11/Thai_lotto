@@ -69,6 +69,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
   const [sourceQuery, setSourceQuery] = useState('');
   const [copied24Sets, setCopied24Sets] = useState(false);
+  const [copiedHedge, setCopiedHedge] = useState(false);
   const [isVerifyingLatest, setIsVerifyingLatest] = useState(false);
   const [verifyNotice, setVerifyNotice] = useState<{ ok: boolean; text: string } | null>(null);
   const [lastScorecard, setLastScorecard] = useState<PostDrawScorecard | null>(null);
@@ -83,6 +84,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     navigator.clipboard.writeText(text);
     setCopied24Sets(true);
     setTimeout(() => setCopied24Sets(false), 2000);
+  };
+
+  const handleCopyHedgeSets = () => {
+    const hb = prediction.hedgingBreakdown;
+    const text = `3 ตัวหน้า: ${hb.threeDigitFront.join(' ')} | 3 ตัวหลัง: ${hb.threeDigitBack.join(' ')} | 2 ตัวหน้า: ${hb.twoDigitFront.join(' ')} | 2 ตัวท้าย: ${hb.twoDigitBack.join(' ')}`;
+    navigator.clipboard.writeText(text);
+    setCopiedHedge(true);
+    setTimeout(() => setCopiedHedge(false), 2000);
   };
 
   const handleVerifyLatestDraw = async () => {
@@ -432,6 +441,75 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
+      {/* Dual-Window Momentum (60% 7-Draw vs 40% 200-Draw) & Anchor Digits */}
+      {prediction.dualWindowMomentum && (
+        <div className="rounded-2xl bg-slate-900/75 border border-slate-800 p-5 sm:p-6 space-y-4">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-emerald-400">
+                Dual-Window Momentum · 60% ระยะสั้น ({prediction.dualWindowMomentum.recentWindowDraws} งวด) + 40% ฐานสถิติ ({prediction.dualWindowMomentum.longWindowDraws} งวด)
+              </div>
+              <h2 className="text-lg font-bold text-white">
+                ตารางจับเลขไหล & ล็อกเลขยืนพื้น (Anchor Digits) · Pure Math 100%
+              </h2>
+              <p className="text-xs text-slate-400">
+                {prediction.dualWindowMomentum.summaryNote}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-4 text-xs font-mono tabular-nums shrink-0">
+              <div>
+                <div className="text-[11px] text-slate-400 font-sans">Top 3 ({prediction.dualWindowMomentum.recentWindowDraws} งวดล่าสุด)</div>
+                <div className="text-sm font-bold text-sky-300">
+                  {prediction.dualWindowMomentum.recent7TopDigitsOverall.join(' · ')}
+                </div>
+              </div>
+              <div className="h-7 w-px bg-slate-800" aria-hidden="true" />
+              <div>
+                <div className="text-[11px] text-slate-400 font-sans">Top 3 ({prediction.dualWindowMomentum.longWindowDraws} งวดหลัก)</div>
+                <div className="text-sm font-bold text-slate-200">
+                  {prediction.dualWindowMomentum.long200TopDigitsOverall.join(' · ')}
+                </div>
+              </div>
+              <div className="h-7 w-px bg-slate-800" aria-hidden="true" />
+              <div>
+                <div className="text-[11px] text-slate-400 font-sans">เลขยืนพื้นรวม</div>
+                <div className="text-sm font-bold text-amber-300">
+                  {prediction.dualWindowMomentum.anchorDigitsOverall.length > 0
+                    ? prediction.dualWindowMomentum.anchorDigitsOverall.join(' · ')
+                    : 'ไม่มีเลขชน Top 3 ซ้ำ'}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 divide-y sm:divide-y-0 lg:divide-x divide-slate-800/90 tabular-nums">
+            {prediction.dualWindowMomentum.perPositionSummary.map((posItem, idx) => (
+              <div key={posItem.positionIndex} className={idx > 0 ? 'pt-3 sm:pt-0 lg:pl-4 space-y-2' : 'space-y-2'}>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-bold text-white">{posItem.positionLabel}</span>
+                  {posItem.anchorDigits.length > 0 ? (
+                    <span className="font-mono font-bold text-amber-300">
+                      ยืนพื้น {posItem.anchorDigits.join(',')} · ล็อก {posItem.lockedSetCount}/4 ชุด
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">ไม่มีเลขยืนพื้นเฉพาะหลัก</span>
+                  )}
+                </div>
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-slate-400 font-sans">7 งวด (60%):</span>
+                  <span className="text-sky-300 font-semibold">{posItem.recent7Top3.join(' · ')}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs font-mono">
+                  <span className="text-slate-400 font-sans">200 งวด (40%):</span>
+                  <span className="text-slate-200 font-semibold">{posItem.long200Top3.join(' · ')}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Strategy Output: Win-4 -> 24 Sets + 4 Focus Sets (BAAC/GSB) OR 4D Diverse Sniper Sets */}
       {isWin4Mode ? (
         <div className="space-y-4">
@@ -622,10 +700,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
                 <Sparkles className="w-4 h-4 text-amber-400" />
-                <span>4 ชุด Diverse Sniper (Confidence-Weighted 4D)</span>
+                <span>4 ชุดหัวกะทิ Diverse Sniper (Dual-Window 60/40)</span>
               </h2>
               <p className="text-xs text-slate-400">
-                คำนวณจากคะแนนสถิติ 200 งวดร่วมกับโหวตชนเลข 22 แหล่งข้อมูล · ยึด Hot Outlier (&ge;2x) ได้สูงสุด 2 ชุด และกระจายตำแหน่งอื่นไม่ซ้ำ
+                ให้น้ำหนัก 60% จาก 7 งวดล่าสุด + 40% จาก 200 งวด ร่วมกับโหวต 22 แหล่ง · บังคับล็อกเลขยืนพื้นให้อยู่อย่างน้อย 2 ใน 4 ชุด
               </p>
             </div>
             <div className="text-xs text-slate-400 font-mono tabular-nums">
@@ -676,6 +754,102 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {/* Hedging Breakdown Panel (แตกชุดกันทุน 3 ตัวเน้น ตัดหน้า-ตัดหลัง & 2 ตัวเด่น หน้า-ท้าย) */}
+      {prediction.hedgingBreakdown && (
+        <div className="rounded-2xl bg-slate-900/75 border border-slate-800 p-5 sm:p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+            <div>
+              <div className="text-xs font-medium text-sky-400">
+                Hedging Breakdown · สกัดจาก 4 ชุดหัวกะทิ ({prediction.sniperSets.map((s) => s.number4D).join(' · ')})
+              </div>
+              <h2 className="text-lg font-bold text-white">
+                แตกชุดกันทุน: ชุด 3 ตัวเน้น (ตัดหน้า-ตัดหลัง) & ชุด 2 ตัวเด่น (หน้า-ท้าย)
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={handleCopyHedgeSets}
+              className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-amber-300 flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            >
+              {copiedHedge ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedHedge ? 'คัดลอกชุดกันทุนแล้ว' : 'คัดลอกชุดกันทุน'}</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:divide-x divide-slate-800 tabular-nums">
+            {/* 3 ตัวเน้น (ตัดหน้า-ตัดหลัง) */}
+            <div className="space-y-3">
+              <div className="text-xs font-semibold text-sky-300">
+                ชุด 3 ตัวเน้น (กันหลุด 4 ตัวตรง)
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <div className="text-[11px] text-slate-400">ตัดหน้า 3 ตัว (ABC)</div>
+                  <div className="flex flex-wrap gap-2 font-mono">
+                    {prediction.hedgingBreakdown.threeDigitFront.map((num3) => (
+                      <span
+                        key={`f3-${num3}`}
+                        className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-sm font-bold text-sky-300"
+                      >
+                        {num3}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-[11px] text-slate-400">ตัดหลัง 3 ตัว (BCD)</div>
+                  <div className="flex flex-wrap gap-2 font-mono">
+                    {prediction.hedgingBreakdown.threeDigitBack.map((num3) => (
+                      <span
+                        key={`b3-${num3}`}
+                        className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-sm font-bold text-amber-300"
+                      >
+                        {num3}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 2 ตัวเด่น (หน้า-ท้าย) */}
+            <div className="space-y-3 lg:pl-6">
+              <div className="text-xs font-semibold text-emerald-300">
+                ชุด 2 ตัวเด่น (เล่นกันทุนหน้า-ท้าย)
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <div className="text-[11px] text-slate-400">2 ตัวหน้า (AB)</div>
+                  <div className="flex flex-wrap gap-2 font-mono">
+                    {prediction.hedgingBreakdown.twoDigitFront.map((num2) => (
+                      <span
+                        key={`f2-${num2}`}
+                        className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-sm font-bold text-emerald-300"
+                      >
+                        {num2}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="text-[11px] text-slate-400">2 ตัวท้าย (CD)</div>
+                  <div className="flex flex-wrap gap-2 font-mono">
+                    {prediction.hedgingBreakdown.twoDigitBack.map((num2) => (
+                      <span
+                        key={`b2-${num2}`}
+                        className="px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-sm font-bold text-amber-200"
+                      >
+                        {num2}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

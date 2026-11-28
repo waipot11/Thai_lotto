@@ -151,6 +151,17 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
       }
       secLines.push(`🗓️ งวด ${pred.drawDate} (${pred.dayOfWeek})`);
 
+      const dw = pred.dualWindowMomentum;
+      const anchorLabels = dw
+        ? [
+            ...dw.anchorDigitsOverall.map((d) => `รวม:${d}`),
+            ...dw.perPositionSummary.flatMap((p) => p.anchorDigits.map((d) => `${p.positionLabel}:${d}`))
+          ]
+        : [];
+      if (anchorLabels.length > 0) {
+        secLines.push(`📍 เลขยืนพื้น Dual-Window (60/40): ${anchorLabels.join(' · ')}`);
+      }
+
       if (isWin4Mode) {
         secLines.push(`🔥 แกนวิน 4 ตัวลงทุน: [ ${pred.win4Breakdown.coreDigits4.join(' - ')} ]`);
         secLines.push(
@@ -168,6 +179,11 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
             secLines.push(`⚡ กันเบิ้ล/หาม 4 ชุด: ${pred.win4Breakdown.threeDigitDoubleHedgeSets.join(' · ')}`);
           }
           secLines.push(`💎 วิน 2 ตัว 12 หาง: ${pred.win4Breakdown.twoDigitNoDouble12.slice(0, 8).join(' · ')}`);
+          if (pred.hedgingBreakdown) {
+            secLines.push(
+              `🛟 แตกชุดกันทุน 4D: 3 หน้า (${pred.hedgingBreakdown.threeDigitFront.join(',')}) | 2 หน้า-ท้าย (${pred.hedgingBreakdown.twoDigitFront.slice(0, 3).join(',')} / ${pred.hedgingBreakdown.twoDigitBack.slice(0, 3).join(',')})`
+            );
+          }
         }
       } else {
         secLines.push(
@@ -175,7 +191,7 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
         );
 
         if (config.includeSniperSets) {
-          secLines.push(`🎯 Diverse Sniper Sets: ${pred.sniperSets.map((s) => s.number4D).join(' · ')}`);
+          secLines.push(`🎯 ชุดหัวกะทิ 4D (Dual-Window 60/40): ${pred.sniperSets.map((s) => s.number4D).join(' · ')}`);
           if (pred.hotOutliersSummary.length > 0) {
             secLines.push(
               `🔥 Hot Outlier (>=2x): ${pred.hotOutliersSummary.map((h) => `${h.positionLabel} ${h.digit} (${h.ratioToAvg}x)`).join(' · ')}`
@@ -184,8 +200,14 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
         }
 
         if (config.includeBackups) {
-          secLines.push(`🛡️ 3 ตัวโต๊ดกันพลาด: ${pred.backupThreeToad.slice(0, 3).join(' · ')}`);
-          secLines.push(`💎 2 ตัวท้ายประคอง: ${pred.backupTwoBack.slice(0, 4).join(' · ')}`);
+          const hb = pred.hedgingBreakdown;
+          if (hb) {
+            secLines.push(`🛡️ แตกชุดกันทุน (จาก 4 ชุดหัวกะทิ):`);
+            secLines.push(`   • 3 ตัวเน้น (ตัดหน้า): ${hb.threeDigitFront.join(' · ')}`);
+            secLines.push(`   • 3 ตัวเน้น (ตัดหลัง): ${hb.threeDigitBack.join(' · ')}`);
+            secLines.push(`   • 2 ตัวเด่น (หน้า): ${hb.twoDigitFront.join(' · ')} | (ท้าย): ${hb.twoDigitBack.join(' · ')}`);
+          }
+          secLines.push(`🎯 3 ตัวโต๊ดกันพลาด: ${pred.backupThreeToad.slice(0, 3).join(' · ')}`);
         }
       }
 

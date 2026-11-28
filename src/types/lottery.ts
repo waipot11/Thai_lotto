@@ -106,7 +106,45 @@ export interface Sniper4DSet {
   highLowRatio: string;
   isHotOutlierAnchored: boolean;
   outlierNotes: string[];
+  isAnchorDigitLocked?: boolean;
+  anchorDigitNotes?: string[];
   rationale: string;
+}
+
+export interface DualWindowPositionSummary {
+  positionIndex: 0 | 1 | 2 | 3;
+  positionLabel: string;
+  recent7Top3: string[];
+  long200Top3: string[];
+  anchorDigits: string[];
+  lockedSetCount: number;
+}
+
+export interface DualWindowMomentumSummary {
+  recentWindowDraws: number;
+  longWindowDraws: number;
+  recentWeightPct: number;
+  longWeightPct: number;
+  recent7TopDigitsOverall: string[];
+  long200TopDigitsOverall: string[];
+  anchorDigitsOverall: string[];
+  anchorDigitsByPos: [string[], string[], string[], string[]];
+  perPositionSummary: [
+    DualWindowPositionSummary,
+    DualWindowPositionSummary,
+    DualWindowPositionSummary,
+    DualWindowPositionSummary
+  ];
+  summaryNote: string;
+}
+
+export interface HedgingBreakdown {
+  threeDigitFront: string[];
+  threeDigitBack: string[];
+  threeDigitAllUnique: string[];
+  twoDigitFront: string[];
+  twoDigitBack: string[];
+  twoDigitAllUnique: string[];
 }
 
 export type CircuitBreakerState = 'normal' | 'yellow_nearmiss' | 'red_pause';
@@ -293,6 +331,8 @@ export interface AIPrediction4DResult {
   superNumber4D: string;
   sniperSets: Sniper4DSet[];
   win4Breakdown: Win4StrategyBreakdown;
+  dualWindowMomentum: DualWindowMomentumSummary;
+  hedgingBreakdown: HedgingBreakdown;
   backupThreeToad: string[];
   backupTwoBack: string[];
   hotOutliersSummary: {
