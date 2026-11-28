@@ -1,233 +1,243 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Header, AppTab } from './components/Header';
 import { DashboardView } from './components/DashboardView';
-import { AnalyzerView } from './components/AnalyzerView';
-import { FacebookAutoPostView } from './components/FacebookAutoPostView';
-import { TelegramGroupView } from './components/TelegramGroupView';
+import { DataInputView } from './components/DataInputView';
 import { StatisticsView } from './components/StatisticsView';
 import { BacktestingView } from './components/BacktestingView';
+import { TelegramGroupView } from './components/TelegramGroupView';
 import { LotteryCardModal } from './components/LotteryCardModal';
-import { LiveDrawModal } from './components/LiveDrawModal';
 import {
-  evaluateRealDatabaseAccuracy,
-  getHistoricalDrawsByType,
-  generateDynamicLotteryPrediction
-} from './data/lotteryHistory';
-import {
-  LOTTERY_LIST,
-  LOTTERY_META_MAP,
-  getAvailableDrawsByType,
-  getNextDrawInfoByType
-} from './data/specialLotteries';
-import { getSourcesForDayOfWeek } from './data/sourcesData';
-import { AIPredictionResult, LotterySourceItem, LotteryType } from './types/lottery';
+  LOTTERY_4D_LIST,
+  LOTTERY_4D_META_MAP,
+  build4DPredictionSummary,
+  getAllDefault4DStore,
+  getDefault4DDraws,
+  getNextDrawInfo4D
+} from './data/lottery4DDatabase';
+import { AIPrediction4DResult, Lottery4DType, LotteryDraw4D } from './types/lottery';
+
+const LOCAL_DRAWS_STORAGE_KEY = 'ai_4d_draws_store_v2';
+const ALL_LOTTERY_KEYS: Lottery4DType[] = ['lao', 'malay', 'vietnam', 'thai', 'baac', 'gsb'];
+
+function readLocalDrawsBackup(): Partial<Record<Lottery4DType, LotteryDraw4D[]>> {
+  try {
+    const raw = localStorage.getItem(LOCAL_DRAWS_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+}
+
+function writeLocalDrawsBackup(store: Record<Lottery4DType, LotteryDraw4D[]>) {
+  try {
+    localStorage.setItem(LOCAL_DRAWS_STORAGE_KEY, JSON.stringify(store));
+  } catch {
+    // Ignore quota errors cleanly
+  }
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<AppTab>('dashboard');
-  const [lotteryType, setLotteryType] = useState<LotteryType>('gov');
+  const [lotteryType, setLotteryType] = useState<Lottery4DType>('lao');
   const [isCardModalOpen, setIsCardModalOpen] = useState(false);
-  const [isLiveDrawModalOpen, setIsLiveDrawModalOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isAutoPostEnabled, setIsAutoPostEnabled] = useState(true);
-  const [isTelegramEnabled, setIsTelegramEnabled] = useState(true);
 
-  const nextDraw = useMemo(() => getNextDrawInfoByType(lotteryType), [lotteryType]);
-  const [sources, setSources] = useState<LotterySourceItem[]>(() => getSourcesForDayOfWeek(nextDraw.dayOfWeek));
+  const [drawsStore, setDrawsStore] = useState<Record<Lottery4DType, LotteryDraw4D[]>>(() => {
+    const defaults = getAllDefault4DStore();
+    const localBackup = readLocalDrawsBackup();
+    ALL_LOTTERY_KEYS.forEach((t) => {
+      if (Array.isArray(localBackup[t]) && localBackup[t]!.length >= 10) {
+        defaults[t] = localBackup[t]!;
+      }
+    });
+    return defaults;
+  });
 
-  const currentDrawsPool = useMemo(() => getHistoricalDrawsByType(lotteryType), [lotteryType]);
-  const currentAccuracyReport = useMemo(
-    () => evaluateRealDatabaseAccuracy(currentDrawsPool),
-    [currentDrawsPool]
+  // Non-destructive sync: never let cold-started server seed draws overwrite local imported draws
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/4d/draws?lotteryType=${lotteryType}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!active || !data?.success || !Array.isArray(data.draws) || data.draws.length === 0) return;
+        const serverDraws: LotteryDraw4D[] = data.draws;
+
+        const localBackup = readLocalDrawsBackup();
+        const localDraws: LotteryDraw4D[] = Array.isArray(localBackup[lotteryType])
+          ? localBackup[lotteryType]!
+          : [];
+
+        const localRealDraws = localDraws.filter((d) => d.source !== 'database');
+        const serverRealKeys = new Set(
+          serverDraws
+            .filter((d) => d.source !== 'database')
+            .map((d) => `${d.dateIso}:${d.number4D}`)
+        );
+        const missingOnServer = localRealDraws.filter(
+          (d) => !serverRealKeys.has(`${d.dateIso}:${d.number4D}`)
+        );
+
+        const realDates = new Set([
+          ...serverDraws.filter((d) => d.source !== 'database').map((d) => d.dateIso),
+          ...localRealDraws.map((d) => d.dateIso)
+        ]);
+
+        const mergedMap = new Map<string, LotteryDraw4D>();
+        for (const item of serverDraws) {
+          if (item.source === 'database' && realDates.has(item.dateIso)) continue;
+          mergedMap.set(`${item.dateIso}:${item.number4D}`, item);
+        }
+        for (const item of localRealDraws) {
+          mergedMap.set(`${item.dateIso}:${item.number4D}`, item);
+        }
+        const merged = Array.from(mergedMap.values()).sort((a, b) =>
+          b.dateIso.localeCompare(a.dateIso)
+        );
+
+        if (missingOnServer.length > 0) {
+          fetch('/api/4d/draws/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              lotteryType,
+              source: missingOnServer[0].source || 'manual',
+              items: missingOnServer
+            })
+          }).catch(() => {});
+        }
+
+        setDrawsStore((prev) => {
+          const next = { ...prev, [lotteryType]: merged };
+          writeLocalDrawsBackup(next);
+          return next;
+        });
+      })
+      .catch(() => {
+        // Fallback smoothly to initialized default + localStorage draws
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [lotteryType]);
+
+  const currentDraws = useMemo(
+    () => drawsStore[lotteryType] || getDefault4DDraws(lotteryType),
+    [drawsStore, lotteryType]
   );
 
-  const [accuracyOverrides, setAccuracyOverrides] = useState<Partial<Record<LotteryType, { rate: number; total: number }>>>({});
-  const currentAccuracyRate = accuracyOverrides[lotteryType]?.rate ?? currentAccuracyReport.overallRate;
-  const currentTotalDraws = accuracyOverrides[lotteryType]?.total ?? currentAccuracyReport.total;
+  const nextDraw = useMemo(() => getNextDrawInfo4D(lotteryType), [lotteryType]);
 
-  // Multi-Draw Switcher Options per lottery type
-  const availableDraws = useMemo(
-    () => getAvailableDrawsByType(lotteryType, nextDraw),
-    [lotteryType, nextDraw]
+  const prediction = useMemo<AIPrediction4DResult>(
+    () => build4DPredictionSummary(currentDraws, lotteryType, nextDraw),
+    [currentDraws, lotteryType, nextDraw]
   );
 
-  const [selectedDrawId, setSelectedDrawId] = useState<string>('next');
-
-  // Dynamic initial prediction state for the active lottery & draw
-  const [prediction, setPrediction] = useState<AIPredictionResult>(() =>
-    generateDynamicLotteryPrediction(
-      nextDraw.drawDateStr,
-      nextDraw.dayOfWeek,
-      nextDraw.drawDateIso,
-      sources,
-      lotteryType
-    )
-  );
-
-  // Precomputed predictions across all 3 lotteries for combined Telegram group alerts
-  const allPredictions = useMemo<Record<LotteryType, AIPredictionResult>>(() => {
-    const govNext = getNextDrawInfoByType('gov');
-    const baacNext = getNextDrawInfoByType('baac');
-    const gsbNext = getNextDrawInfoByType('gsb');
+  const allPredictions = useMemo<Record<Lottery4DType, AIPrediction4DResult>>(() => {
     return {
-      gov:
-        lotteryType === 'gov'
+      lao:
+        lotteryType === 'lao'
           ? prediction
-          : generateDynamicLotteryPrediction(govNext.drawDateStr, govNext.dayOfWeek, govNext.drawDateIso, undefined, 'gov'),
+          : build4DPredictionSummary(drawsStore.lao, 'lao', getNextDrawInfo4D('lao')),
+      malay:
+        lotteryType === 'malay'
+          ? prediction
+          : build4DPredictionSummary(drawsStore.malay, 'malay', getNextDrawInfo4D('malay')),
+      vietnam:
+        lotteryType === 'vietnam'
+          ? prediction
+          : build4DPredictionSummary(drawsStore.vietnam, 'vietnam', getNextDrawInfo4D('vietnam')),
+      thai:
+        lotteryType === 'thai'
+          ? prediction
+          : build4DPredictionSummary(drawsStore.thai, 'thai', getNextDrawInfo4D('thai')),
       baac:
         lotteryType === 'baac'
           ? prediction
-          : generateDynamicLotteryPrediction(baacNext.drawDateStr, baacNext.dayOfWeek, baacNext.drawDateIso, undefined, 'baac'),
+          : build4DPredictionSummary(drawsStore.baac, 'baac', getNextDrawInfo4D('baac')),
       gsb:
         lotteryType === 'gsb'
           ? prediction
-          : generateDynamicLotteryPrediction(gsbNext.drawDateStr, gsbNext.dayOfWeek, gsbNext.drawDateIso, undefined, 'gsb')
+          : build4DPredictionSummary(drawsStore.gsb, 'gsb', getNextDrawInfo4D('gsb'))
     };
-  }, [lotteryType, prediction]);
+  }, [lotteryType, prediction, drawsStore]);
 
-  const handleSelectLotteryType = (nextType: LotteryType) => {
-    if (nextType === lotteryType) return;
-    setLotteryType(nextType);
-    setSelectedDrawId('next');
-    const targetNextDraw = getNextDrawInfoByType(nextType);
-    const customOnes = sources.filter((s) => s.id.startsWith('custom-'));
-    const refreshedSources = [...customOnes, ...getSourcesForDayOfWeek(targetNextDraw.dayOfWeek)];
-    setSources(refreshedSources);
-    const pred = generateDynamicLotteryPrediction(
-      targetNextDraw.drawDateStr,
-      targetNextDraw.dayOfWeek,
-      targetNextDraw.drawDateIso,
-      refreshedSources,
-      nextType
-    );
-    setPrediction(pred);
+  const handleDrawsUpdated = (nextDraws: LotteryDraw4D[]) => {
+    setDrawsStore((prev) => {
+      const next = { ...prev, [lotteryType]: nextDraws };
+      writeLocalDrawsBackup(next);
+      return next;
+    });
   };
 
-  const handleSelectDraw = (drawId: string) => {
-    setSelectedDrawId(drawId);
-    const target = availableDraws.find((d) => d.id === drawId);
-    if (target) {
-      const customOnes = sources.filter((s) => s.id.startsWith('custom-'));
-      const refreshedSources = [...customOnes, ...getSourcesForDayOfWeek(target.dayOfWeek)];
-      setSources(refreshedSources);
-      const pred = generateDynamicLotteryPrediction(
-        target.drawDateStr,
-        target.dayOfWeek,
-        target.drawDateIso,
-        refreshedSources,
-        lotteryType
-      );
-      setPrediction(pred);
-    }
-  };
-
-  const handleDrawAdded = (newRate: number, newTotal: number) => {
-    setAccuracyOverrides((prev) => ({
-      ...prev,
-      [lotteryType]: { rate: newRate, total: newTotal }
-    }));
-    const meta = LOTTERY_META_MAP[lotteryType];
-    setPrediction((prev) => ({
-      ...prev,
-      confidenceScore: newRate,
-      aiNarrative: `🔬 อัปเดตฐานข้อมูล${meta.name}ในระบบเป็น ${newTotal} งวดแล้ว พบว่าความแม่นยำรวมอยู่ที่ ${newRate}% พร้อมสรุป 3 ตัวตรง VIP จาก ${prev.totalSourcesAnalyzed || 22} แหล่งข้อมูล`
-    }));
-  };
-
-  // Fetch initial Facebook Auto-Post & Telegram configurations
-  useEffect(() => {
-    fetch('/api/facebook/config')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && data.config) {
-          setIsAutoPostEnabled(data.config.isAutoPostEnabled ?? true);
-        }
-      })
-      .catch((e) => console.error('Error fetching facebook config:', e));
-
-    fetch('/api/telegram/config')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && data.config) {
-          setIsTelegramEnabled(data.config.isTelegramEnabled ?? true);
-        }
-      })
-      .catch((e) => console.error('Error fetching telegram config:', e));
-  }, []);
-
-  // Run AI Analysis function
-  const handleRunAnalysis = async (customNotes: string = '') => {
-    setIsLoading(true);
+  const handleResetDraws = async () => {
     try {
-      const currentTarget = availableDraws.find((d) => d.id === selectedDrawId) || availableDraws[0];
-      const response = await fetch('/api/analyze-lottery', {
+      const res = await fetch('/api/4d/draws/reset', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          lotteryType,
-          drawDate: currentTarget.drawDateStr,
-          dayOfWeek: currentTarget.dayOfWeek,
-          sources: sources,
-          customNotes: customNotes
-        })
+        body: JSON.stringify({ lotteryType })
       });
-
-      const resData = await response.json();
-      if (resData.success && resData.data) {
-        setPrediction(resData.data);
-        setActiveTab('dashboard');
+      const data = await res.json();
+      if (data?.success && Array.isArray(data.draws)) {
+        handleDrawsUpdated(data.draws);
+        return;
       }
-    } catch (error) {
-      console.error('Error analyzing lottery:', error);
-    } finally {
-      setIsLoading(false);
+    } catch {
+      // Fallback reset locally
     }
+    handleDrawsUpdated(getDefault4DDraws(lotteryType));
   };
 
-  const activeMeta = LOTTERY_META_MAP[lotteryType];
+  const activeMeta = LOTTERY_4D_META_MAP[lotteryType];
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-['Prompt',sans-serif]">
-      {/* Header */}
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <Header
         nextDraw={nextDraw}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        isAutoPostEnabled={isAutoPostEnabled}
-        isTelegramEnabled={isTelegramEnabled}
-        lotteryShortName={activeMeta.shortName}
+        onQuickIngest={() => setActiveTab('ingest')}
       />
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
-        {/* Global Lottery Type Selector Bar (รัฐบาล · ธ.ก.ส. · ออมสิน) */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 rounded-2xl px-4 py-3">
+      <main className="flex-1 max-w-[1440px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
+        {/* Global Lottery Switcher Bar (4 Countries 4D + ธ.ก.ส. & ออมสิน Win-4 -> 3D) */}
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 rounded-2xl px-4 py-3">
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
-            <span className="font-semibold text-white">ประเภทสลากที่วิเคราะห์:</span>
+            <span className="font-semibold text-white">{activeMeta.name}</span>
+            <span aria-hidden="true" className="text-slate-600">·</span>
             <span className="text-slate-400">{activeMeta.scheduleLabel}</span>
-            <span aria-hidden="true" className="text-slate-600 hidden sm:inline">·</span>
-            <span className="text-slate-400 hidden sm:inline">{activeMeta.prizeFormatLabel}</span>
+            <span aria-hidden="true" className="text-slate-600 hidden md:inline">·</span>
+            <span className="text-amber-300/90 hidden md:inline">{activeMeta.strictParsingRule}</span>
           </div>
 
-          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 overflow-x-auto max-w-full">
-            {LOTTERY_LIST.map((item) => {
+          <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-xl border border-slate-800 overflow-x-auto max-w-full shrink-0">
+            {LOTTERY_4D_LIST.map((item) => {
               const isSelected = lotteryType === item.id;
               const activeClass =
-                item.id === 'baac'
+                item.accentColor === 'emerald'
                   ? 'bg-emerald-500 text-slate-950 font-semibold'
-                  : item.id === 'gsb'
-                    ? 'bg-pink-500 text-slate-950 font-semibold'
-                    : 'bg-amber-500 text-slate-950 font-semibold';
+                  : item.accentColor === 'sky'
+                    ? 'bg-sky-500 text-slate-950 font-semibold'
+                    : item.accentColor === 'rose'
+                      ? 'bg-rose-500 text-white font-semibold'
+                      : item.accentColor === 'teal'
+                        ? 'bg-teal-400 text-slate-950 font-semibold'
+                        : item.accentColor === 'pink'
+                          ? 'bg-pink-400 text-slate-950 font-semibold'
+                          : 'bg-amber-500 text-slate-950 font-semibold';
+
               return (
                 <button
                   key={item.id}
-                  onClick={() => handleSelectLotteryType(item.id)}
-                  className={`px-3.5 py-1.5 rounded-lg text-xs sm:text-sm transition-colors whitespace-nowrap shrink-0 ${
+                  type="button"
+                  onClick={() => setLotteryType(item.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                     isSelected
                       ? activeClass
                       : 'text-slate-300 hover:text-white hover:bg-slate-800/70 font-medium'
                   }`}
                 >
-                  {item.shortName === 'รัฐบาล' ? 'สลากรัฐบาล' : `หวย ${item.shortName}`}
+                  {item.shortName}
                 </button>
               );
             })}
@@ -238,28 +248,38 @@ export default function App() {
           <DashboardView
             prediction={prediction}
             nextDraw={nextDraw}
-            realAccuracyRate={currentAccuracyRate}
-            totalRealDraws={currentTotalDraws}
-            availableDraws={availableDraws}
-            selectedDrawId={selectedDrawId}
-            onSelectDraw={handleSelectDraw}
-            onNavigateToAutoPost={() => setActiveTab('autopost')}
-            onNavigateToTelegram={() => setActiveTab('telegram')}
+            totalDrawsInDb={currentDraws.length}
+            onDrawsUpdated={handleDrawsUpdated}
+            onNavigateToIngest={() => setActiveTab('ingest')}
+            onNavigateToStatistics={() => setActiveTab('statistics')}
             onNavigateToBacktest={() => setActiveTab('backtest')}
+            onNavigateToTelegram={() => setActiveTab('telegram')}
             onOpenCardModal={() => setIsCardModalOpen(true)}
-            onOpenLiveDrawModal={() => setIsLiveDrawModalOpen(true)}
-            onReAnalyze={() => handleRunAnalysis()}
-            isLoading={isLoading}
           />
         )}
 
-        {activeTab === 'analyzer' && (
-          <AnalyzerView
-            sources={sources}
-            setSources={setSources}
-            nextDraw={nextDraw}
-            onRunAnalysis={handleRunAnalysis}
-            isLoading={isLoading}
+        {activeTab === 'ingest' && (
+          <DataInputView
+            lotteryType={lotteryType}
+            draws={currentDraws}
+            onDrawsUpdated={handleDrawsUpdated}
+            onResetDraws={handleResetDraws}
+            onNavigateToStatistics={() => setActiveTab('statistics')}
+          />
+        )}
+
+        {activeTab === 'statistics' && (
+          <StatisticsView
+            draws={currentDraws}
+            lotteryType={lotteryType}
+          />
+        )}
+
+        {activeTab === 'backtest' && (
+          <BacktestingView
+            draws={currentDraws}
+            lotteryType={lotteryType}
+            onNavigateToIngest={() => setActiveTab('ingest')}
           />
         )}
 
@@ -268,62 +288,25 @@ export default function App() {
             prediction={prediction}
             nextDraw={nextDraw}
             allPredictions={allPredictions}
-            onEnabledChange={setIsTelegramEnabled}
-          />
-        )}
-
-        {activeTab === 'autopost' && (
-          <FacebookAutoPostView
-            prediction={prediction}
-            nextDraw={nextDraw}
-          />
-        )}
-
-        {activeTab === 'statistics' && (
-          <StatisticsView
-            draws={currentDrawsPool}
-            lotteryType={lotteryType}
-          />
-        )}
-
-        {activeTab === 'backtest' && (
-          <BacktestingView
-            onOpenLiveDrawModal={() => setIsLiveDrawModalOpen(true)}
-            draws={currentDrawsPool}
-            lotteryType={lotteryType}
           />
         )}
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-slate-900 bg-slate-950 py-8 px-4 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto space-y-2">
           <p className="text-slate-400">
-            ระบบวิเคราะห์ความน่าจะเป็นสลากรัฐบาล · หวย ธ.ก.ส. · หวยออมสิน AI (Thai Lottery AI Statistical Analyzer)
-          </p>
-          <p>
-            วิเคราะห์เชิงลึกด้วยแบบจำลองคณิตศาสตร์ความถี่สถิติ ร่วมกับโมเดลสังเคราะห์ข้อความและข้อมูลหลายแหล่ง
+            ระบบวิเคราะห์หวยชุด 4 ประเทศ (ลาวพัฒนา · มาเลย์ 4D · เวียดนาม/ฮานอย · ไทย 4D) และสลาก ธ.ก.ส. · ออมสิน (วิน 4 ตัวแตก 3 ตัว)
           </p>
           <p className="text-slate-600">
-            ⚠️ คำเตือน: การเสี่ยงโชคมีความเสี่ยง ข้อมูลในระบบเป็นการคำนวณทางสถิติและความน่าจะเป็นเท่านั้น ไม่มีการการันตีผลรางวัล 100% โปรดใช้วิจารณญาณในการตัดสินใจ
+            คำเตือน: ข้อมูลเป็นการคำนวณความน่าจะเป็นทางสถิติย้อนหลัง 200 งวดและตารางชนเลข 22 แหล่งเท่านั้น โปรดใช้วิจารณญาณในการตัดสินใจ
           </p>
         </div>
       </footer>
 
-      {/* Visual Lottery Fortune Card Modal */}
       <LotteryCardModal
         isOpen={isCardModalOpen}
         onClose={() => setIsCardModalOpen(false)}
         prediction={prediction}
-      />
-
-      {/* Real-Time Live Draw Entry Modal */}
-      <LiveDrawModal
-        isOpen={isLiveDrawModalOpen}
-        onClose={() => setIsLiveDrawModalOpen(false)}
-        onDrawAdded={handleDrawAdded}
-        currentAccuracyRate={currentAccuracyRate}
-        lotteryType={lotteryType}
       />
     </div>
   );

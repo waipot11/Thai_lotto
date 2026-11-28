@@ -1,14 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  AIPredictionResult,
-  LotteryType,
+  AIPrediction4DResult,
+  Lottery4DType,
   NextDrawInfo,
   TelegramConfig,
   TelegramDiscoveredChat,
   TelegramEnvStatus,
   TelegramLog
 } from '../types/lottery';
-import { LOTTERY_LIST, LOTTERY_META_MAP } from '../data/specialLotteries';
+import { LOTTERY_4D_LIST, LOTTERY_4D_META_MAP } from '../data/lottery4DDatabase';
 import {
   Send,
   Calendar,
@@ -27,15 +27,16 @@ import {
   ShieldCheck,
   Search,
   Pin,
-  Bell
+  Bell,
+  Lock
 } from 'lucide-react';
 
-const TG_LOCAL_STORAGE_KEY = 'ai_lottery_telegram_config_v1';
+const TG_LOCAL_STORAGE_KEY = 'ai_lottery_4d_telegram_config_v1';
 
 interface TelegramGroupViewProps {
-  prediction: AIPredictionResult;
+  prediction: AIPrediction4DResult;
   nextDraw: NextDrawInfo;
-  allPredictions?: Record<LotteryType, AIPredictionResult>;
+  allPredictions?: Record<Lottery4DType, AIPrediction4DResult>;
   onEnabledChange?: (enabled: boolean) => void;
 }
 
@@ -47,17 +48,19 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
 }) => {
   const [config, setConfig] = useState<TelegramConfig>({
     isTelegramEnabled: true,
-    daysBeforeDraw: 1,
-    notifyTime: '08:30',
+    scheduleMode: 'per_lottery_offset',
+    minutesBeforeDraw: 90,
+    daysBeforeDraw: 0,
+    notifyTime: '15:00',
     botToken: '',
     chatId: '',
     messageThreadId: '',
     pinMessage: false,
     disableNotification: false,
-    includeThreeStraight: true,
-    includeTwoDigits: true,
-    includeRunners: true,
-    lotteryTypes: ['gov', 'baac', 'gsb']
+    includeSniperSets: true,
+    includeDefensiveScaling: true,
+    includeBackups: true,
+    lotteryTypes: ['lao', 'malay', 'vietnam', 'thai', 'baac', 'gsb']
   });
 
   const [useSimulatedMode, setUseSimulatedMode] = useState(true);
@@ -85,6 +88,17 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
   const [envStatus, setEnvStatus] = useState<TelegramEnvStatus | null>(null);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [customMessage, setCustomMessage] = useState('');
+  const [adminSecret, setAdminSecret] = useState('');
+  const [adminAuthorized, setAdminAuthorized] = useState(true);
+  const [showAdminSecret, setShowAdminSecret] = useState(false);
+
+  const buildAdminHeaders = (extra?: Record<string, string>): Record<string, string> => {
+    const headers: Record<string, string> = { ...(extra || {}) };
+    if (adminSecret.trim()) {
+      headers['x-admin-secret'] = adminSecret.trim();
+    }
+    return headers;
+  };
 
   const saveToBrowserStorage = (cfg: TelegramConfig, simulated: boolean) => {
     try {
@@ -115,65 +129,89 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
     }
   };
 
-  // Generate Telegram-friendly VIP lottery alert message (supports รัฐบาล, ธ.ก.ส., ออมสิน)
-  const activeLotteryTypes: LotteryType[] =
-    config.lotteryTypes && config.lotteryTypes.length > 0 ? config.lotteryTypes : ['gov'];
+  // Generate Telegram-friendly VIP 4D & Win-4 lottery alert message (supports ลาวพัฒนา, มาเลย์, ฮานอย, ไทย, ธ.ก.ส., ออมสิน)
+  const validLotIds = new Set<Lottery4DType>(['lao', 'malay', 'vietnam', 'thai', 'baac', 'gsb']);
+  const activeLotteryTypes: Lottery4DType[] =
+    config.lotteryTypes && config.lotteryTypes.filter((t) => validLotIds.has(t)).length > 0
+      ? config.lotteryTypes.filter((t) => validLotIds.has(t))
+      : ['lao'];
 
   const generatedMessage = useMemo(() => {
-    const formatLotterySection = (pred: AIPredictionResult, showHeaderPrefix: boolean) => {
-      const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight?.[0] || '305';
-      const win4 = pred.win4Strategy;
-      const win4Digits = win4 ? win4.digits.join(' - ') : (pred.luckyDayPlanetaryNumbers || []).slice(0, 4).join(' - ');
-      const win2Sets = win4 ? win4.twoDigitNoDouble.join(' · ') : (pred.twoDigitsTop || []).slice(0, 8).join(' · ');
-      const win3Toad = win4 ? win4.threeDigitToad.join(' · ') : (pred.threeDigitsToad || []).slice(0, 4).join(' · ');
-      const coreStraight = (
-        pred.sniperThreeStraight?.coreStraightPicks?.map((p) => p.number) ||
-        pred.threeDigitsStraight?.slice(0, 3) ||
-        [megaShot]
-      ).join(' · ');
-      const lotteryLabel = pred.lotteryName || LOTTERY_META_MAP[pred.lotteryType || 'gov'].name;
+    const formatLotterySection = (pred: AIPrediction4DResult, showHeaderPrefix: boolean) => {
+      const cb = pred.circuitBreaker;
+      const lotteryLabel = pred.lotteryName || LOTTERY_4D_META_MAP[pred.lotteryType].name;
+      const isWin4Mode = pred.strategyMode === 'win4_3d';
+      const activeSets = isWin4Mode
+        ? pred.win4Breakdown.threeDigitStraightSets.slice(0, Math.max(1, cb.recommendedSetsCount || 1))
+        : pred.sniperSets.slice(0, Math.max(1, cb.recommendedSetsCount || 1)).map((s) => s.number4D);
 
       const secLines: string[] = [];
       if (showHeaderPrefix) {
         secLines.push(`📌 [${lotteryLabel}]`);
       }
       secLines.push(`🗓️ งวด ${pred.drawDate} (${pred.dayOfWeek})`);
-      secLines.push(`🔥 แกนวิน 4 ตัวลงทุน: [ ${win4Digits} ]`);
 
-      if (config.includeTwoDigits) {
-        secLines.push(`💎 วิน 2 ตัว 12 หาง: ${win2Sets}`);
-        if (!showHeaderPrefix && win4?.twoDigitDoubles?.length) {
-          secLines.push(`🛡️ กันเบิ้ล 4 หาง: ${win4.twoDigitDoubles.join(' · ')}`);
+      if (isWin4Mode) {
+        secLines.push(`🔥 แกนวิน 4 ตัวลงทุน: [ ${pred.win4Breakdown.coreDigits4.join(' - ')} ]`);
+        secLines.push(
+          `👑 4 ชุดเน้น (เม็ดเดียว ${pred.win4Breakdown.megaThreeStraight}): ${pred.win4Breakdown.threeDigitStraightSets.join(' · ')} (ชนเฉลี่ย ${pred.deepAnalysis?.averageAgreementOutOf22 || 0}/${pred.totalSourcesAnalyzed || 22} แหล่ง)`
+        );
+        if (config.includeSniperSets) {
+          const all24 = pred.win4Breakdown.threeDigitStraight24Sets || [];
+          secLines.push(`🎯 แตก 3 ตัว 24 ชุด (ไม่รวมเบิ้ล):`);
+          secLines.push(`   ${all24.slice(0, 12).join(' · ')}`);
+          secLines.push(`   ${all24.slice(12, 24).join(' · ')}`);
+        }
+        if (config.includeBackups) {
+          secLines.push(`🛡️ วิน 3 ตัวโต๊ด 4 ชุด: ${pred.win4Breakdown.threeDigitToadSets.join(' · ')}`);
+          if (pred.win4Breakdown.threeDigitDoubleHedgeSets?.length > 0) {
+            secLines.push(`⚡ กันเบิ้ล/หาม 4 ชุด: ${pred.win4Breakdown.threeDigitDoubleHedgeSets.join(' · ')}`);
+          }
+          secLines.push(`💎 วิน 2 ตัว 12 หาง: ${pred.win4Breakdown.twoDigitNoDouble12.slice(0, 8).join(' · ')}`);
+        }
+      } else {
+        secLines.push(
+          `👑 Super Number 4 ตัว: [ ${pred.superNumber4D} ] (ชนเฉลี่ย ${pred.deepAnalysis?.averageAgreementOutOf22 || 0}/${pred.totalSourcesAnalyzed || 22} แหล่ง)`
+        );
+
+        if (config.includeSniperSets) {
+          secLines.push(`🎯 Diverse Sniper Sets: ${pred.sniperSets.map((s) => s.number4D).join(' · ')}`);
+          if (pred.hotOutliersSummary.length > 0) {
+            secLines.push(
+              `🔥 Hot Outlier (>=2x): ${pred.hotOutliersSummary.map((h) => `${h.positionLabel} ${h.digit} (${h.ratioToAvg}x)`).join(' · ')}`
+            );
+          }
+        }
+
+        if (config.includeBackups) {
+          secLines.push(`🛡️ 3 ตัวโต๊ดกันพลาด: ${pred.backupThreeToad.slice(0, 3).join(' · ')}`);
+          secLines.push(`💎 2 ตัวท้ายประคอง: ${pred.backupTwoBack.slice(0, 4).join(' · ')}`);
         }
       }
 
-      if (config.includeThreeStraight) {
-        secLines.push(`👑 วิน 3 ตัวโต๊ด 4 ชุด: ${win3Toad}`);
-        secLines.push(`🎯 เม็ดเดียวตรง: ${megaShot} (เน้น: ${coreStraight})`);
-      }
-
-      if (config.includeRunners && !showHeaderPrefix) {
+      if (config.includeDefensiveScaling) {
+        const cbEmoji =
+          cb.status === 'red_pause' ? '🔴' : cb.status === 'yellow_nearmiss' ? '🟡' : '🟢';
+        secLines.push(`${cbEmoji} สถานะพอร์ต: ${cb.statusTitle}`);
         secLines.push(
-          `⚡ วิ่ง-รูดตัวเดียว: ${pred.topSection?.runningDigit || win4?.digits?.[0] || '3'} (รอง ${pred.topSection?.runningSub || win4?.digits?.[1] || '0'})`
+          `💰 งบแนะนำ: ${cb.recommendedBudgetBaht} บาท (${cb.recommendedSetsCount} ชุด: ${cb.status === 'red_pause' ? 'หยุดพัก 1 งวด' : activeSets.join(', ')})`
         );
       }
 
       return secLines.join('\n');
     };
 
-    const totalSources = prediction.totalSourcesAnalyzed || prediction.multiSourceSummary?.length || 22;
-
     if (allPredictions && activeLotteryTypes.length > 1) {
       const sections = activeLotteryTypes.map((t) =>
         formatLotterySection(allPredictions[t] || prediction, true)
       );
       return [
-        `📣 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram (ครบ ${activeLotteryTypes.length} หวย)`,
-        `📊 สังเคราะห์ ${totalSources} แหล่ง · สถิติย้อนหลัง`,
+        `📣 แจ้งเตือนเลขเด็ด AI กลุ่ม Telegram (ครบ ${activeLotteryTypes.length} สลาก)`,
+        `📊 ตารางชนเลขครบ 22 แหล่งข้อมูล · สถิติ 200 งวด`,
         '',
         sections.join('\n\n────────────────\n\n'),
         '',
-        `✨ ขอให้สมาชิกในกลุ่มเฮงๆ ปังๆ ทุกท่านครับ!`
+        `✨ บริหารพอร์ตตามสัญญาณ Defensive Scaling อย่างมีวินัยครับ!`
       ].join('\n');
     }
 
@@ -181,46 +219,52 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
       allPredictions && activeLotteryTypes.length === 1
         ? allPredictions[activeLotteryTypes[0]] || prediction
         : prediction;
-    const targetName =
-      targetPred.lotteryName || LOTTERY_META_MAP[targetPred.lotteryType || 'gov'].name;
+    const targetName = targetPred.lotteryName || LOTTERY_4D_META_MAP[targetPred.lotteryType].name;
 
     return [
-      `📣 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram [${targetName}]`,
-      `📊 สังเคราะห์ ${totalSources} แหล่ง · สถิติย้อนหลัง`,
+      `📣 แจ้งเตือน Super Number 4D กลุ่ม Telegram [${targetName}]`,
+      `📊 ชนเลขครบ ${targetPred.totalSourcesAnalyzed || 22} แหล่ง · ความเสถียร 200 งวด: ${targetPred.consistencyScore}/100 (เข้า/เฉียด ${targetPred.nearMissOrWinRate200}%)`,
       '',
       formatLotterySection(targetPred, false),
       '',
-      `✨ ขอให้สมาชิกในกลุ่มเฮงๆ ปังๆ ทุกท่านครับ!`
+      `✨ บริหารพอร์ตตามสัญญาณ Defensive Scaling อย่างมีวินัยครับ!`
     ].join('\n');
   }, [
     prediction,
     allPredictions,
     activeLotteryTypes,
-    config.includeThreeStraight,
-    config.includeTwoDigits,
-    config.includeRunners
+    config.includeSniperSets,
+    config.includeDefensiveScaling,
+    config.includeBackups
   ]);
 
   useEffect(() => {
     setCustomMessage(generatedMessage);
   }, [generatedMessage]);
 
-  const fetchConfigAndLogs = async () => {
+  const fetchConfigAndLogs = async (secretOverride?: string) => {
     setIsLoadingLogs(true);
     const localBackup = readFromBrowserStorage();
     try {
-      const res = await fetch('/api/telegram/config');
+      const headers: Record<string, string> = {};
+      const activePasscode = (secretOverride !== undefined ? secretOverride : adminSecret).trim();
+      if (activePasscode) {
+        headers['x-admin-secret'] = activePasscode;
+      }
+      const res = await fetch('/api/telegram/config', { headers });
       const data = await res.json();
       if (data.success) {
         const nextEnvStatus = (data.envStatus as TelegramEnvStatus | undefined) || null;
         setEnvStatus(nextEnvStatus);
+        const isAuthorized = data.adminAuthorized !== false;
+        setAdminAuthorized(isAuthorized);
         const envHasCreds = Boolean(nextEnvStatus?.hasBotToken && nextEnvStatus?.hasChatId);
 
         const serverCfg = data.config as Partial<TelegramConfig> | undefined;
         const serverHasCreds = Boolean(serverCfg?.botToken && serverCfg?.chatId);
         const localHasCreds = Boolean(localBackup?.config?.botToken || localBackup?.config?.chatId);
 
-        if (!serverHasCreds && localHasCreds && localBackup?.config) {
+        if (isAuthorized && !serverHasCreds && localHasCreds && localBackup?.config) {
           const restored: TelegramConfig = {
             ...config,
             ...(serverCfg || {}),
@@ -234,7 +278,7 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
 
           await fetch('/api/telegram/config', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: buildAdminHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(restored)
           });
           setSaveBanner({
@@ -253,7 +297,7 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
               : !(serverHasCreds || envHasCreds);
           setUseSimulatedMode(nextSim);
 
-          if (serverHasCreds) {
+          if (isAuthorized && serverHasCreds) {
             saveToBrowserStorage(merged, nextSim);
           }
         }
@@ -306,13 +350,18 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
     try {
       const res = await fetch('/api/telegram/config', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildAdminHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(targetConfig)
       });
       const data = await res.json();
+      if (res.status === 401) {
+        setAdminAuthorized(false);
+        throw new Error(data.error || 'กรุณากรอกรหัส Admin Passcode ก่อนบันทึก');
+      }
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'บันทึกข้อมูลเข้าเซิร์ฟเวอร์ไม่สำเร็จ');
       }
+      setAdminAuthorized(true);
       setHasUnsavedChanges(false);
       if (showSuccessBanner) {
         setSaveBanner({
@@ -351,12 +400,15 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
     try {
       const res = await fetch('/api/telegram/verify', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildAdminHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           botToken: config.botToken
         })
       });
       const data = await res.json();
+      if (res.status === 401) {
+        setAdminAuthorized(false);
+      }
       if (res.ok && data.success && data.bot) {
         const chats = Array.isArray(data.discoveredChats) ? data.discoveredChats : [];
         setDiscoveredChats(chats);
@@ -408,7 +460,7 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
     try {
       const res = await fetch('/api/telegram/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildAdminHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           botToken: config.botToken,
           chatId: config.chatId,
@@ -422,6 +474,9 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
       });
 
       const data = await res.json();
+      if (res.status === 401) {
+        setAdminAuthorized(false);
+      }
       if (data.success) {
         setSendResult({
           success: true,
@@ -459,18 +514,28 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
   };
 
   const computedNotifyDateStr = useMemo(() => {
-    const d = new Date(nextDraw.drawDateIso);
-    d.setDate(d.getDate() - config.daysBeforeDraw);
+    const d = new Date(`${nextDraw.drawDateIso}T12:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - config.daysBeforeDraw);
     const months = [
       'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
       'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
     ];
-    return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear() + 543}`;
-  }, [nextDraw, config.daysBeforeDraw]);
+    return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear() + 543}`;
+  }, [nextDraw.drawDateIso, config.daysBeforeDraw]);
 
   const computedDaysLeft = useMemo(() => {
     return nextDraw.daysUntilDraw - config.daysBeforeDraw;
   }, [nextDraw.daysUntilDraw, config.daysBeforeDraw]);
+
+  const scheduleMode = config.scheduleMode || 'per_lottery_offset';
+  const leadMinutes = config.minutesBeforeDraw || 90;
+
+  const formatMinutesToTime = (totalMins: number) => {
+    const safe = Math.max(0, totalMins);
+    const h = Math.floor(safe / 60) % 24;
+    const m = safe % 60;
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  };
 
   return (
     <div className="space-y-8">
@@ -480,13 +545,17 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
           <div>
             <div className="text-xs text-sky-400 font-semibold flex items-center gap-2 mb-2">
               <Send className="w-3.5 h-3.5" />
-              <span>ระบบส่งข้อมูลให้สมาชิกกลุ่ม Telegram อัตโนมัติ (ก่อนหวยออก {config.daysBeforeDraw} วัน)</span>
+              <span>
+                {scheduleMode === 'per_lottery_offset'
+                  ? `ระบบแจ้งเตือนแยกตามเวลาออกของแต่ละหวย (ล่วงหน้า ${leadMinutes} นาที ก่อนเวลาปิดรับ)`
+                  : `ระบบแจ้งเตือนรวมเวลาเดียวทุกหวย (${config.notifyTime} น. · ก่อนหวยออก ${config.daysBeforeDraw} วัน)`}
+              </span>
             </div>
             <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
-              ส่งเลขเด็ดเข้ากลุ่ม Telegram ให้สมาชิกทันที & อัตโนมัติ
+              ส่ง Super Number 4D เข้ากลุ่ม Telegram ทันที & อัตโนมัติ
             </h2>
             <p className="text-slate-300 text-sm mt-1">
-              ส่งชุดฟันธง 3 ตัวตรง ({prediction.sniperThreeStraight?.megaSingleShot || prediction.threeDigitsStraight[0]}), เลขวิ่ง-รูด และ 2 ตัวบน-ล่าง ตรงเข้ากลุ่ม Telegram ผ่าน Telegram Bot API
+              ส่งแนวทางตามเวลาออกรางวัลจริงของทั้ง 6 สลาก (ธ.ก.ส. 10:30 · ออมสิน 14:00 · ไทย 16:00 · มาเลย์/ฮานอย 18:30 · ลาว 20:30 น.) พร้อมบันทึกประวัติแยกแต่ละสลาก
             </p>
           </div>
 
@@ -501,7 +570,7 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
             <button
               onClick={() => handleSaveConfig({ isTelegramEnabled: !config.isTelegramEnabled })}
               aria-label="เปิดหรือปิดการส่งข้อมูลเข้ากลุ่ม Telegram อัตโนมัติ"
-              className={`w-14 h-8 rounded-full p-1 transition-colors flex items-center ${
+              className={`w-14 h-8 rounded-full p-1 transition-colors flex items-center cursor-pointer ${
                 config.isTelegramEnabled ? 'bg-sky-500 justify-end' : 'bg-slate-700 justify-start'
               }`}
             >
@@ -515,55 +584,135 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
           <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4">
             <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
               <Calendar className="w-3.5 h-3.5 text-amber-400" />
-              <span>งวดหวยออกเป้าหมาย</span>
+              <span>งวดเป้าหมาย ({LOTTERY_4D_META_MAP[prediction.lotteryType].shortName})</span>
             </div>
             <div className="text-lg font-bold text-amber-300">{nextDraw.drawDateStr}</div>
-            <div className="text-xs text-slate-500 mt-1">({nextDraw.dayOfWeek})</div>
+            <div className="text-xs text-slate-500 mt-1">
+              ({nextDraw.dayOfWeek} · ออก {LOTTERY_4D_META_MAP[prediction.lotteryType].drawTimeLabel})
+            </div>
           </div>
 
           <div className="bg-slate-950/60 border border-sky-500/30 rounded-2xl p-4">
             <div className="text-xs text-sky-400 flex items-center gap-1.5 mb-1">
               <Bell className="w-3.5 h-3.5" />
-              <span>กำหนดส่งเข้ากลุ่ม (ก่อน {config.daysBeforeDraw} วัน)</span>
+              <span>กำหนดส่งเข้ากลุ่ม ({config.daysBeforeDraw === 0 ? 'วันหวยออก' : `ก่อน ${config.daysBeforeDraw} วัน`})</span>
             </div>
             <div className="text-lg font-bold text-sky-300">{computedNotifyDateStr}</div>
-            <div className="text-xs text-slate-400 mt-1">เวลา {config.notifyTime} น.</div>
+            <div className="text-xs text-slate-400 mt-1 font-mono">
+              {scheduleMode === 'per_lottery_offset'
+                ? `เวลาแจ้งเตือนสลากนี้: ${formatMinutesToTime(LOTTERY_4D_META_MAP[prediction.lotteryType].drawTimeMinutes - leadMinutes)} น.`
+                : `เวลารวม: ${config.notifyTime} น.`}
+            </div>
           </div>
 
           <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4">
             <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
               <Clock className="w-3.5 h-3.5 text-emerald-400" />
-              <span>นับถอยหลังวันส่งกลุ่ม</span>
+              <span>โหมดตั้งเวลาแจ้งเตือน</span>
             </div>
-            <div className="text-lg font-bold text-emerald-300">
-              {computedDaysLeft <= 0 ? 'ถึงวันส่งข้อมูลแล้ว!' : `อีก ${computedDaysLeft} วัน`}
+            <div className="flex flex-col gap-1.5 mt-1">
+              <button
+                type="button"
+                onClick={() => handleSaveConfig({ scheduleMode: 'per_lottery_offset' })}
+                className={`px-2.5 py-1 rounded-lg text-left text-xs font-semibold border transition-colors cursor-pointer ${
+                  scheduleMode === 'per_lottery_offset'
+                    ? 'bg-sky-500/20 border-sky-400 text-sky-200'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                แยกตามเวลาออกของแต่ละหวย
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveConfig({ scheduleMode: 'fixed_time' })}
+                className={`px-2.5 py-1 rounded-lg text-left text-xs font-semibold border transition-colors cursor-pointer ${
+                  scheduleMode === 'fixed_time'
+                    ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                ส่งรวมเวลาเดียวทุกหวย
+              </button>
             </div>
-            <div className="text-xs text-slate-500 mt-1">(อีก {nextDraw.daysUntilDraw} วันถึงวันหวยออก)</div>
           </div>
 
           <div className="bg-slate-950/60 border border-slate-800 rounded-2xl p-4">
             <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
               <Settings className="w-3.5 h-3.5 text-indigo-400" />
-              <span>วันล่วงหน้า & เวลาส่ง</span>
+              <span>
+                {scheduleMode === 'per_lottery_offset' ? 'วัน & นาทีก่อนหวยออก' : 'วันล่วงหน้า & เวลาส่ง'}
+              </span>
             </div>
-            <div className="flex items-center gap-2 mt-1">
+            <div className="flex flex-wrap items-center gap-2 mt-1">
               <select
                 value={config.daysBeforeDraw}
                 onChange={(e) => handleSaveConfig({ daysBeforeDraw: Number(e.target.value) })}
                 className="bg-slate-900 border border-slate-700 text-white rounded-lg px-2 py-1 text-xs font-semibold focus:outline-none focus:border-sky-400"
               >
+                <option value={0}>วันหวยออก (0 วัน)</option>
                 <option value={1}>ก่อน 1 วัน</option>
                 <option value={2}>ก่อน 2 วัน</option>
                 <option value={3}>ก่อน 3 วัน</option>
-                <option value={5}>ก่อน 5 วัน</option>
               </select>
-              <input
-                type="time"
-                value={config.notifyTime}
-                onChange={(e) => handleSaveConfig({ notifyTime: e.target.value })}
-                className="bg-slate-900 border border-slate-700 text-white rounded-lg px-2 py-1 text-xs font-semibold focus:outline-none focus:border-sky-400"
-              />
+              {scheduleMode === 'per_lottery_offset' ? (
+                <select
+                  value={leadMinutes}
+                  onChange={(e) => handleSaveConfig({ minutesBeforeDraw: Number(e.target.value) })}
+                  className="bg-slate-900 border border-slate-700 text-sky-300 rounded-lg px-2 py-1 text-xs font-semibold focus:outline-none focus:border-sky-400"
+                >
+                  <option value={30}>ก่อนออก 30 นาที</option>
+                  <option value={60}>ก่อนออก 1 ชม.</option>
+                  <option value={90}>ก่อนออก 1.5 ชม.</option>
+                  <option value={120}>ก่อนออก 2 ชม.</option>
+                  <option value={180}>ก่อนออก 3 ชม.</option>
+                </select>
+              ) : (
+                <input
+                  type="time"
+                  value={config.notifyTime}
+                  onChange={(e) => handleSaveConfig({ notifyTime: e.target.value })}
+                  className="bg-slate-900 border border-slate-700 text-white rounded-lg px-2 py-1 text-xs font-semibold focus:outline-none focus:border-sky-400"
+                />
+              )}
             </div>
+          </div>
+        </div>
+
+        {/* 6-Lottery Timetable Strip */}
+        <div className="rounded-2xl bg-slate-950/70 border border-slate-800 p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <span className="font-semibold text-slate-200">
+              ตารางเวลาส่งแจ้งเตือนอัตโนมัติทั้ง 6 สลาก (เวลาประเทศไทย UTC+7)
+            </span>
+            <span className="text-[11px] text-slate-400">
+              Endpoint สำหรับ External Cron (แนะนำทุก 15 นาที):{' '}
+              <code className="text-sky-300 font-mono">/api/telegram/cron-tick</code>
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 text-xs tabular-nums">
+            {LOTTERY_4D_LIST.map((lot) => {
+              const alertTimeStr =
+                scheduleMode === 'per_lottery_offset'
+                  ? formatMinutesToTime(lot.drawTimeMinutes - leadMinutes)
+                  : config.notifyTime;
+              const isEnabled = activeLotteryTypes.includes(lot.id);
+              return (
+                <div
+                  key={lot.id}
+                  className={`rounded-xl border px-3 py-2 space-y-1 ${
+                    isEnabled
+                      ? 'bg-slate-900/90 border-slate-700'
+                      : 'bg-slate-950/50 border-slate-800/60 opacity-50'
+                  }`}
+                >
+                  <div className="font-semibold text-white truncate">{lot.shortName}</div>
+                  <div className="text-[11px] text-slate-400 font-mono">ออก {lot.drawTimeLabel}</div>
+                  <div className="text-[11px] text-sky-300 font-mono font-bold">
+                    แจ้งเตือน {alertTimeStr} น.
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -599,6 +748,52 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
                 </button>
               </div>
             </div>
+
+            {envStatus?.hasAdminSecret && (
+              <div
+                className={`rounded-xl border px-3.5 py-3 text-xs space-y-2 ${
+                  adminAuthorized
+                    ? 'bg-emerald-950/25 border-emerald-500/35'
+                    : 'bg-amber-950/35 border-amber-500/45'
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-semibold text-white flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                    <span>
+                      {adminAuthorized
+                        ? 'ปลดล็อกสิทธิ์ Admin API แล้ว (เซสชันปัจจุบัน)'
+                        : 'เปิดใช้งาน Admin Passcode (ADMIN_API_SECRET) — กรุณายืนยันรหัสก่อนแก้ไข/ส่ง'}
+                    </span>
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative flex-1 min-w-[200px]">
+                    <input
+                      type={showAdminSecret ? 'text' : 'password'}
+                      value={adminSecret}
+                      onChange={(e) => setAdminSecret(e.target.value)}
+                      placeholder="กรอก ADMIN_API_SECRET เพื่อปลดล็อก"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-3 pr-9 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowAdminSecret((prev) => !prev)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                    >
+                      {showAdminSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => fetchConfigAndLogs(adminSecret)}
+                    className="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    ยืนยันรหัส
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-4">
               <div>
@@ -832,6 +1027,24 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
                     active: Boolean(envStatus?.hasChatId),
                     preview: envStatus?.chatIdPreview,
                     desc: 'Group Chat ID (เช่น -1001234567890) หรือ @channelusername'
+                  },
+                  {
+                    keyName: 'KV_REST_API_URL',
+                    active: Boolean(envStatus?.hasKvPersistence),
+                    preview: envStatus?.hasKvPersistence ? 'เชื่อมต่อ Cloud KV แล้ว' : undefined,
+                    desc: 'จัดเก็บฐานข้อมูลสถิติและการแจ้งเตือนถาวรบน Vercel Serverless (ร่วมกับ KV_REST_API_TOKEN)'
+                  },
+                  {
+                    keyName: 'CRON_SECRET',
+                    active: Boolean(envStatus?.hasCronSecret),
+                    preview: envStatus?.hasCronSecret ? 'ป้องกัน Cron แล้ว' : undefined,
+                    desc: 'ป้องกันการยิง /api/telegram/cron-tick จากภายนอกโดยไม่ได้รับอนุญาต'
+                  },
+                  {
+                    keyName: 'ADMIN_API_SECRET',
+                    active: Boolean(envStatus?.hasAdminSecret),
+                    preview: envStatus?.hasAdminSecret ? 'เปิดใช้สิทธิ์ Admin แล้ว' : undefined,
+                    desc: 'รหัสผ่านป้องกันการแก้ไขตั้งค่า Bot หรือสั่งส่งข้อความเข้ากลุ่ม'
                   }
                 ].map((item) => (
                   <div
@@ -846,7 +1059,7 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
                             item.active ? 'text-emerald-400' : 'text-slate-500'
                           }`}
                         >
-                          {item.active ? `พร้อมใช้ (${item.preview})` : 'ยังไม่ได้ตั้งค่า'}
+                          {item.active ? `พร้อมใช้ (${item.preview})` : 'ยังไม่ได้ตั้งค่า (Optional)'}
                         </span>
                       </div>
                       <div className="text-[11px] text-slate-400 mt-0.5">{item.desc}</div>
@@ -901,10 +1114,10 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
             {/* Lottery Types Selection for Telegram Group */}
             <div className="space-y-2">
               <div className="text-xs font-semibold text-slate-300">
-                เลือกประเภทหวยที่จะส่งเข้ากลุ่ม (ส่งรวมกันทีเดียวหรือเลือกเฉพาะหวยก็ได้):
+                เลือกหวยชุด 4 ประเทศที่จะส่งเข้ากลุ่ม:
               </div>
               <div className="flex flex-wrap gap-2.5 text-xs">
-                {LOTTERY_LIST.map((lot) => {
+                {LOTTERY_4D_LIST.map((lot) => {
                   const isChecked = activeLotteryTypes.includes(lot.id);
                   return (
                     <label
@@ -922,7 +1135,7 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
                           const next = e.target.checked
                             ? Array.from(new Set([...activeLotteryTypes, lot.id]))
                             : activeLotteryTypes.filter((id) => id !== lot.id);
-                          if (next.length === 0) return; // Require at least 1 lottery selected
+                          if (next.length === 0) return;
                           handleSaveConfig({ lotteryTypes: next });
                         }}
                         className="accent-sky-500"
@@ -936,9 +1149,9 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
 
             <div className="flex flex-wrap gap-3 text-xs">
               {[
-                { key: 'includeThreeStraight', label: 'ใส่ชุด 3 ตัวตรง VIP' },
-                { key: 'includeRunners', label: 'ใส่เลขวิ่ง-รูด' },
-                { key: 'includeTwoDigits', label: 'ใส่ชุด 2 ตัวบน-ล่าง' }
+                { key: 'includeSniperSets', label: 'ใส่ชุด Diverse Sniper 4 ชุด & Hot Outlier' },
+                { key: 'includeBackups', label: 'ใส่ชุด 3 ตัวโต๊ด & 2 ตัวท้ายประคอง' },
+                { key: 'includeDefensiveScaling', label: 'ใส่สัญญาณ Defensive Scaling & งบแนะนำ' }
               ].map((opt) => {
                 const checked = Boolean(config[opt.key as keyof TelegramConfig]);
                 return (
@@ -1023,7 +1236,11 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
               <div className="bg-[#17212b] px-4 py-3 flex items-center justify-between text-white border-b border-slate-800/80">
                 <div>
                   <div className="text-xs font-bold">กลุ่ม VIP เลขเด็ด AI แม่นยำ</div>
-                  <div className="text-[10px] text-sky-400">bot · Auto Alert {config.notifyTime} น.</div>
+                  <div className="text-[10px] text-sky-400">
+                    {scheduleMode === 'per_lottery_offset'
+                      ? `bot · แจ้งเตือนก่อนหวยออก ${leadMinutes} นาที`
+                      : `bot · Auto Alert ${config.notifyTime} น.`}
+                  </div>
                 </div>
                 {config.pinMessage && (
                   <span className="text-[10px] text-amber-300 flex items-center gap-1">
@@ -1061,7 +1278,7 @@ export const TelegramGroupView: React.FC<TelegramGroupViewProps> = ({
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <h3 className="text-sm font-bold text-white">ประวัติการส่งเข้ากลุ่ม Telegram</h3>
               <button
-                onClick={fetchConfigAndLogs}
+                onClick={() => fetchConfigAndLogs()}
                 className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoadingLogs ? 'animate-spin' : ''}`} />

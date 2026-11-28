@@ -1,9 +1,9 @@
-import { AIPredictionResult } from '../types/lottery';
+import { AIPrediction4DResult } from '../types/lottery';
 
 export function renderLotteryCardToCanvas(
   canvas: HTMLCanvasElement,
-  prediction: AIPredictionResult,
-  watermark: string = 'AI Lottery Deep Analysis'
+  prediction: AIPrediction4DResult,
+  watermark: string = 'AI หวยชุด 4 ประเทศ & ธ.ก.ส. · ออมสิน'
 ) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -13,15 +13,13 @@ export function renderLotteryCardToCanvas(
   canvas.width = width;
   canvas.height = height;
 
-  // Background - Deep Luxury Obsidian Gradient
   const bgGrad = ctx.createLinearGradient(0, 0, width, height);
   bgGrad.addColorStop(0, '#020617');
   bgGrad.addColorStop(0.55, '#0f172a');
-  bgGrad.addColorStop(1, '#052e16');
+  bgGrad.addColorStop(1, '#064e3b');
   ctx.fillStyle = bgGrad;
   ctx.fillRect(0, 0, width, height);
 
-  // Decorative Golden Border
   ctx.strokeStyle = '#eab308';
   ctx.lineWidth = 10;
   ctx.strokeRect(30, 30, width - 60, height - 60);
@@ -30,58 +28,65 @@ export function renderLotteryCardToCanvas(
   ctx.lineWidth = 2;
   ctx.strokeRect(42, 42, width - 84, height - 84);
 
-  const totalSources = prediction.totalSourcesAnalyzed || prediction.multiSourceSummary?.length || 22;
-  const sniper = prediction.sniperThreeStraight;
-  const megaShot = sniper?.megaSingleShot || prediction.topSection?.threeDigitsStraight?.[0] || '427';
+  const isWin4Mode = prediction.strategyMode === 'win4_3d';
+  const superNum = prediction.superNumber4D || '4286';
+  const win4 = prediction.win4Breakdown;
+  const lotteryLabel = prediction.lotteryName || 'AI หวยชุด 4 ประเทศ';
+  const cb = prediction.circuitBreaker;
 
-  const lotteryLabel = prediction.lotteryName || 'สลากกินแบ่งรัฐบาล';
-
-  // Top Title Banner
   ctx.fillStyle = '#eab308';
   ctx.textAlign = 'center';
-  ctx.font = 'bold 32px "Prompt", sans-serif';
-  ctx.fillText(`👑 ฟันธง 3 ตัวตรงๆ · ${lotteryLabel} 👑`, width / 2, 92);
-
-  // Draw Date subtitle
-  ctx.fillStyle = '#f8fafc';
-  ctx.font = 'bold 42px "Prompt", sans-serif';
-  ctx.fillText(`งวดประจำวันที่ ${prediction.drawDate}`, width / 2, 148);
-
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = '23px "Prompt", sans-serif';
+  ctx.font = 'bold 34px "Prompt", sans-serif';
   ctx.fillText(
-    `(${prediction.dayOfWeek}) · สังเคราะห์ ${totalSources} แหล่งข้อมูล & สถิติย้อนหลัง`,
+    isWin4Mode ? `AI วิน 4 ตัวแตก 3 ตัว · ${lotteryLabel}` : `AI Super Number 4D · ${lotteryLabel}`,
     width / 2,
-    186
+    95
   );
 
-  // HERO SECTION: 3-Digit Straight Mega Single Shot (เม็ดเดียว 3 ตัวตรง ฟันธงขาด)
-  const sniperBoxY = 215;
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = 'bold 40px "Prompt", sans-serif';
+  ctx.fillText(`งวดวันที่ ${prediction.drawDate}`, width / 2, 150);
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '22px "Prompt", sans-serif';
+  ctx.fillText(
+    `(${prediction.dayOfWeek}) · ชนครบ ${prediction.totalSourcesAnalyzed || 22} แหล่ง · เสถียรภาพ ${prediction.consistencyScore}/100`,
+    width / 2,
+    190
+  );
+
+  // Hero Box
+  const boxY = 225;
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
   ctx.strokeStyle = '#facc15';
   ctx.lineWidth = 3;
-  ctx.roundRect(75, sniperBoxY, width - 150, 265, 20);
+  ctx.roundRect(75, boxY, width - 150, 275, 20);
   ctx.fill();
   ctx.stroke();
 
   ctx.fillStyle = '#fde047';
   ctx.font = 'bold 28px "Prompt", sans-serif';
   ctx.fillText(
-    `🎯 เม็ดเดียว 3 ตัวตรง ฟันธงขาด (ชน ${sniper?.consensusCount || 19}/${totalSources} แหล่ง)`,
+    isWin4Mode
+      ? `แกนวิน 4 ตัวลงทุน (ชนเฉลี่ย ${prediction.deepAnalysis?.averageAgreementOutOf22 || 0}/${prediction.totalSourcesAnalyzed || 22} แหล่ง)`
+      : `เม็ดเดียว 4 ตัวตรงเน้นสุด (ชนเฉลี่ย ${prediction.deepAnalysis?.averageAgreementOutOf22 || 0}/${prediction.totalSourcesAnalyzed || 22} แหล่ง)`,
     width / 2,
-    sniperBoxY + 42
+    boxY + 46
   );
 
-  // Draw 3 large golden position-locked tiles
-  const labels = ['หลักร้อย', 'หลักสิบ', 'หลักหน่วย'];
-  const tileWidth = 115;
-  const tileGap = 36;
-  const totalRowW = tileWidth * 3 + tileGap * 2;
+  const heroDigits = isWin4Mode ? win4.coreDigits4 : superNum.split('');
+  const labels = isWin4Mode
+    ? ['แกนวิน 1', 'แกนวิน 2', 'แกนวิน 3', 'แกนวิน 4']
+    : ['หลักพัน', 'หลักร้อย', 'หลักสิบ', 'หลักหน่วย'];
+
+  const tileWidth = 112;
+  const tileGap = 32;
+  const totalRowW = tileWidth * 4 + tileGap * 3;
   const startTileX = (width - totalRowW) / 2;
 
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const tx = startTileX + i * (tileWidth + tileGap);
-    const ty = sniperBoxY + 62;
+    const ty = boxY + 72;
 
     const tileGrad = ctx.createLinearGradient(tx, ty, tx + tileWidth, ty + 115);
     tileGrad.addColorStop(0, '#fef08a');
@@ -89,101 +94,97 @@ export function renderLotteryCardToCanvas(
     tileGrad.addColorStop(1, '#ca8a04');
 
     ctx.fillStyle = tileGrad;
-    ctx.roundRect(tx, ty, tileWidth, 112, 18);
+    ctx.roundRect(tx, ty, tileWidth, 115, 18);
     ctx.fill();
 
     ctx.fillStyle = '#020617';
-    ctx.font = 'bold 74px "Prompt", sans-serif';
-    ctx.fillText(megaShot[i] || '0', tx + tileWidth / 2, ty + 82);
+    ctx.font = 'bold 74px "JetBrains Mono", "Prompt", monospace';
+    ctx.fillText(heroDigits[i] || '0', tx + tileWidth / 2, ty + 84);
 
     ctx.fillStyle = '#cbd5e1';
     ctx.font = 'bold 20px "Prompt", sans-serif';
-    ctx.fillText(labels[i], tx + tileWidth / 2, ty + 140);
+    ctx.fillText(labels[i], tx + tileWidth / 2, ty + 148);
   }
 
-  // Core 3-digit Straight Picks Line
-  const coreList = (
-    sniper?.coreStraightPicks?.map((p) => p.number) ||
-    prediction.topSection?.threeDigitsStraight?.slice(0, 3) ||
-    [megaShot]
-  ).slice(0, 3);
-  const backupList = (
-    sniper?.backupStraightPicks?.map((p) => p.number) ||
-    prediction.topSection?.threeDigitsStraight?.slice(3, 6) ||
-    []
-  ).slice(0, 3);
-
-  ctx.fillStyle = '#38bdf8';
-  ctx.font = 'bold 25px "Prompt", sans-serif';
-  ctx.fillText(
-    `3 ตัวตรงเน้นหนัก:  ${coreList.join('   ·   ')}     |     กันพลาด:  ${backupList.join(' · ')}`,
-    width / 2,
-    sniperBoxY + 242
-  );
-
-  // SECTION 2: Running Digits & Top/Bottom 2-Digit Cuts
-  const twoBoxY = 505;
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
+  // Second Box: Either Win-4 -> 3D Breakdown OR Diverse Sniper Sets
+  const setsY = 525;
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
   ctx.strokeStyle = '#38bdf8';
   ctx.lineWidth = 2;
-  ctx.roundRect(75, twoBoxY, width - 150, 240, 18);
+  ctx.roundRect(75, setsY, width - 150, 205, 18);
   ctx.fill();
   ctx.stroke();
 
-  ctx.fillStyle = '#38bdf8';
-  ctx.font = 'bold 26px "Prompt", sans-serif';
-  ctx.fillText('⚡ เลขวิ่ง-รูด & ชุด 2 ตัวบน-ล่าง คัดเน้น', width / 2, twoBoxY + 42);
+  if (isWin4Mode) {
+    ctx.fillStyle = '#38bdf8';
+    ctx.font = 'bold 24px "Prompt", sans-serif';
+    ctx.fillText(`4 ชุดเน้นหลัก (เม็ดเดียว: ${win4.megaThreeStraight}) + แตก 3 ตัว 24 ชุด`, width / 2, setsY + 34);
 
-  // Running digits row
-  const runners = (prediction.topRunners || []).map((r) => r.digit).join('  -  ');
-  ctx.fillStyle = '#fde047';
-  ctx.font = 'bold 30px "Prompt", sans-serif';
-  ctx.fillText(`วิ่ง-รูดตัวเดียวฟันธง:  [ ${prediction.topSection?.runningDigit || '2'} ]   |   เด่นรวม: ${runners}`, width / 2, twoBoxY + 90);
+    ctx.fillStyle = '#fde047';
+    ctx.font = 'bold 38px "JetBrains Mono", "Prompt", monospace';
+    ctx.fillText(win4.threeDigitStraightSets.join('   ·   '), width / 2, setsY + 80);
 
-  // 2 Top & 2 Bottom side-by-side
-  ctx.textAlign = 'left';
-  ctx.fillStyle = '#cbd5e1';
-  ctx.font = '24px "Prompt", sans-serif';
-  ctx.fillText('2 ตัวบนตรงๆ:', 120, twoBoxY + 148);
+    const sets24 = win4.threeDigitStraight24Sets || [];
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = '19px "JetBrains Mono", "Prompt", monospace';
+    ctx.fillText(sets24.slice(0, 12).join(' · '), width / 2, setsY + 120);
+    ctx.fillText(sets24.slice(12, 24).join(' · '), width / 2, setsY + 150);
 
-  const top2List = (prediction.twoDigitsTop || []).slice(0, 5);
-  ctx.fillStyle = '#fef08a';
-  ctx.font = 'bold 34px "Prompt", sans-serif';
-  ctx.fillText(top2List.join('  -  '), 290, twoBoxY + 148);
+    const hedgeSets = win4.threeDigitDoubleHedgeSets || [];
+    if (hedgeSets.length > 0) {
+      ctx.fillStyle = '#fcd34d';
+      ctx.font = 'bold 19px "Prompt", sans-serif';
+      ctx.fillText(`⚡ กันเบิ้ล/หาม 4 ชุด: ${hedgeSets.join(' · ')}`, width / 2, setsY + 185);
+    }
+  } else {
+    ctx.fillStyle = '#38bdf8';
+    ctx.font = 'bold 26px "Prompt", sans-serif';
+    ctx.fillText('4 ชุด Diverse Sniper (Confidence-Weighted)', width / 2, setsY + 44);
 
-  ctx.fillStyle = '#cbd5e1';
-  ctx.font = '24px "Prompt", sans-serif';
-  ctx.fillText('2 ตัวล่างเน้น:', 120, twoBoxY + 202);
+    const sniperLine = prediction.sniperSets.map((s) => s.number4D).join('    ·    ');
+    ctx.fillStyle = '#f8fafc';
+    ctx.font = 'bold 46px "JetBrains Mono", "Prompt", monospace';
+    ctx.fillText(sniperLine, width / 2, setsY + 112);
 
-  const bottom2List = (prediction.twoDigitsBottom || []).slice(0, 5);
-  ctx.fillStyle = '#67e8f9';
-  ctx.font = 'bold 34px "Prompt", sans-serif';
-  ctx.fillText(bottom2List.join('  -  '), 290, twoBoxY + 202);
+    ctx.fillStyle = '#a7f3d0';
+    ctx.font = '23px "Prompt", sans-serif';
+    ctx.fillText(
+      `3 ตัวโต๊ดกันพลาด: ${prediction.backupThreeToad.join(' · ')}   |   2 ตัวท้ายประคอง: ${prediction.backupTwoBack.slice(0, 4).join(' · ')}`,
+      width / 2,
+      setsY + 168
+    );
+  }
 
-  // SECTION 3: Structure & Exclusion Filter Summary
-  const infoBoxY = 768;
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.78)';
-  ctx.strokeStyle = '#10b981';
-  ctx.lineWidth = 1.5;
-  ctx.roundRect(75, infoBoxY, width - 150, 125, 16);
+  // Circuit Breaker / Scaling Box
+  const cbY = 755;
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.82)';
+  ctx.strokeStyle =
+    cb.status === 'red_pause'
+      ? '#f43f5e'
+      : cb.status === 'yellow_nearmiss'
+        ? '#f59e0b'
+        : '#10b981';
+  ctx.lineWidth = 2;
+  ctx.roundRect(75, cbY, width - 150, 130, 16);
   ctx.fill();
   ctx.stroke();
 
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#34d399';
+  ctx.fillStyle =
+    cb.status === 'red_pause'
+      ? '#fda4af'
+      : cb.status === 'yellow_nearmiss'
+        ? '#fde68a'
+        : '#6ee7b7';
   ctx.font = 'bold 24px "Prompt", sans-serif';
-  const win4DigitsText = (prediction.win4Strategy?.digits || prediction.luckyDayPlanetaryNumbers || []).slice(0, 4).join(' - ');
-  ctx.fillText(
-    `🔥 แกนวิน 4 ตัวลงทุน: [ ${win4DigitsText} ]  ·  วิน 2 ตัว 12 หาง  ·  วิน 3 ตัว 4 โต๊ด`,
-    width / 2,
-    infoBoxY + 42
-  );
+  ctx.fillText(`สถานะพอร์ต: ${cb.statusBadgeText}`, width / 2, cbY + 46);
 
-  const doubles = (prediction.win4Strategy?.twoDigitDoubles || prediction.cautionDoubles || []).join(' - ');
-  const toadList = (prediction.win4Strategy?.threeDigitToad || prediction.topSection?.threeDigitsToad || []).slice(0, 4).join(', ');
   ctx.fillStyle = '#cbd5e1';
   ctx.font = '21px "Prompt", sans-serif';
-  ctx.fillText(`วิน 3 ตัวโต๊ด 4 ชุด: ${toadList}   |   กันเบิ้ล 4 หาง: ${doubles}`, width / 2, infoBoxY + 88);
+  ctx.fillText(
+    `งบลงทุนแนะนำ: ${cb.recommendedBudgetBaht.toLocaleString()} บาท (${cb.recommendedSetsCount} ชุด × ${cb.recommendedUnitCostBaht} บ.)`,
+    width / 2,
+    cbY + 92
+  );
 
   // Footer
   const footerY = 945;
@@ -193,5 +194,5 @@ export function renderLotteryCardToCanvas(
 
   ctx.fillStyle = '#64748b';
   ctx.font = '18px "Prompt", sans-serif';
-  ctx.fillText('คำเตือน: ตัวเลขเป็นการคำนวณทางสถิติและความน่าจะเป็นจากฐานข้อมูลจริง โปรดใช้วิจารณญาณ', width / 2, footerY + 38);
+  ctx.fillText('คำเตือน: ข้อมูลนี้เป็นการคำนวณความน่าจะเป็นทางสถิติย้อนหลังเท่านั้น โปรดใช้วิจารณญาณ', width / 2, footerY + 38);
 }

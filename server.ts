@@ -1,23 +1,29 @@
-import express, { Request, Response } from 'express';
+import express, { NextFunction, Request, Response } from 'express';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI, Type } from '@google/genai';
 import {
-  HISTORICAL_DRAWS,
-  buildWin4Strategy,
-  evaluateRealDatabaseAccuracy,
-  generateDynamicLotteryPrediction,
-  getHistoricalDrawsByType,
-  getNextDrawInfo
-} from './src/data/lotteryHistory.ts';
+  LOTTERY_4D_LIST,
+  LOTTERY_4D_META_MAP,
+  build4DPredictionSummary,
+  getAllDefault4DStore,
+  getDefault4DDraws,
+  getNextDrawInfo4D,
+  getScheduledDrawDateStepBack,
+  validateStrict4DNumber
+} from './src/data/lottery4DDatabase.ts';
+import { THAI_DAY_NAMES, THAI_MONTH_NAMES } from './src/data/lotteryHistory.ts';
 import {
-  LOTTERY_META_MAP,
-  getNextDrawInfoByType
-} from './src/data/specialLotteries.ts';
-import { getSourcesForDayOfWeek } from './src/data/sourcesData.ts';
-import { LotteryType } from './src/types/lottery.ts';
+  DrawImportSource,
+  GroundingSourceLink,
+  Lottery4DType,
+  LotteryDraw4D,
+  PostDrawScorecard,
+  TelegramConfig
+} from './src/types/lottery.ts';
 
 dotenv.config();
 
@@ -25,79 +31,60 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const DATA_DIR = process.env.VERCEL
-  ? path.join('/tmp', 'thai-lotto-data')
+  ? path.join('/tmp', 'thai-lotto-4d-data')
   : path.resolve(__dirname, '.data');
-const STORE_FILE = path.join(DATA_DIR, 'app-store.json');
+const STORE_FILE = path.join(DATA_DIR, 'app-4d-store.json');
 
 export const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '15mb' }));
 
-// Initialize GoogleGenAI SDK with server-side API key
+// Initialize @google/genai server-side client
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
   httpOptions: {
     headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
+      'User-Agent': 'aistudio-build'
+    }
+  }
 });
 
-// Persistent Facebook schedule & post logs store
-let facebookScheduleConfig = {
-  isAutoPostEnabled: true,
-  postDaysBefore: 5,
-  postTime: '09:00',
-  pageId: '',
-  pageName: 'เพจเลขเด็ด AI แม่นยำ',
-  pageAccessToken: '',
-  watermarkText: 'AI Lottery Deep Analysis',
-  lastPostedDraw: '',
-  postHashtags: '#เลขเด็ด #หวยรัฐบาล #AIหวยแม่นยำ #สถิติหวย #ตรวจหวย #เลขเด็ดงวดนี้',
-  disclaimer: '⚠️ ตัวเลขเป็นการวิเคราะห์ทางสถิติและความน่าจะเป็นด้วยระบบ AI โปรดใช้วิจารณญาณ'
-};
-
-interface FacebookPostLog {
-  id: string;
-  timestamp: string;
-  drawDate: string;
-  message: string;
-  status: 'published' | 'scheduled' | 'failed' | 'simulated';
-  facebookPostId?: string;
-  reach?: number;
-  permalinkUrl?: string;
-  errorMessage?: string;
+function parseSafeLotteryType(raw?: unknown): Lottery4DType {
+  if (
+    raw === 'lao' ||
+    raw === 'malay' ||
+    raw === 'vietnam' ||
+    raw === 'thai' ||
+    raw === 'baac' ||
+    raw === 'gsb'
+  ) {
+    return raw;
+  }
+  return 'lao';
 }
 
-let facebookPostLogs: FacebookPostLog[] = [
-  {
-    id: 'log-prev-1',
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 10).toISOString(),
-    drawDate: '1 ตุลาคม 2569',
-    message: '🎯 สรุปเลขเด่น AI งวด 1 ต.ค. 69\nเด่นวิ่ง-รูด: 8 - 3\n2 ตัวเน้น: 83 - 38 - 58 - 34\n3 ตัวตรง: 583 - 729\n(ผลออกจริง: รางวัลที่ 1 = 729583, ล่าง = 83 เข้าตรงๆ!)',
-    status: 'published',
-    facebookPostId: 'fb_post_839217491028',
-    reach: 14820,
-    permalinkUrl: 'https://facebook.com'
-  }
-];
+// Persistent 4D Draw Database Store
+let drawsStore: Record<Lottery4DType, LotteryDraw4D[]> = getAllDefault4DStore();
 
-// Persistent Telegram Group Alert store
-let telegramConfig = {
+// Persistent Telegram Group Alert Config & Logs
+let telegramConfig: TelegramConfig = {
   isTelegramEnabled: true,
-  daysBeforeDraw: 1,
-  notifyTime: '08:30',
+  scheduleMode: 'per_lottery_offset',
+  minutesBeforeDraw: 90,
+  daysBeforeDraw: 0,
+  notifyTime: '15:00',
   botToken: '',
   chatId: '',
   messageThreadId: '',
   pinMessage: false,
   disableNotification: false,
-  includeThreeStraight: true,
-  includeTwoDigits: true,
-  includeRunners: true,
-  lotteryTypes: ['gov', 'baac', 'gsb'] as LotteryType[],
-  lastNotifiedDraw: ''
+  includeSniperSets: true,
+  includeDefensiveScaling: true,
+  includeBackups: true,
+  lotteryTypes: ['lao', 'malay', 'vietnam', 'thai', 'baac', 'gsb'],
+  lastNotifiedDraw: '',
+  lastNotifiedByLottery: {}
 };
 
 interface TelegramLogItem {
@@ -113,492 +100,862 @@ interface TelegramLogItem {
 
 let telegramLogs: TelegramLogItem[] = [
   {
-    id: 'tg-log-prev-1',
-    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 24 * 12).toISOString(),
-    drawDate: '1 พฤศจิกายน 2569',
-    message: '🔔 แจ้งเตือนสมาชิกกลุ่ม Telegram (ก่อนหวยออก 1 วัน)\nงวด 1 พฤศจิกายน 2569\n👑 เม็ดเดียว 3 ตัวตรง: 583\n🎯 3 ตัวตรงเน้นหนัก: 583 · 883 · 183',
+    id: 'tg-4d-init-1',
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 18).toISOString(),
+    drawDate: '25 พฤศจิกายน 2569',
+    message:
+      '📣 แจ้งเตือน Super Number 4 ตัว [หวยชุด 4 ประเทศ]\n🎯 ลาวพัฒนา: Super Number 4D [ 4286 ] · เต็มพอร์ต 4 ชุด',
     status: 'simulated',
     chatSummary: 'โหมดจำลอง (Telegram Group)'
   }
 ];
 
-// Persistent live draws store initialized from real database
-let liveDraws = [...HISTORICAL_DRAWS];
+const KV_STORE_KEY = 'thai_lotto_4d_store_v1';
+
+function getKvConfig(): { url: string; token: string } | null {
+  const url = (process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
+  const token = (process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+  if (!url || !token) return null;
+  return { url, token };
+}
+
+function applyParsedStore(parsed: any) {
+  if (!parsed || typeof parsed !== 'object') return;
+  if (parsed.drawsStore && typeof parsed.drawsStore === 'object') {
+    for (const t of ['lao', 'malay', 'vietnam', 'thai', 'baac', 'gsb'] as Lottery4DType[]) {
+      if (Array.isArray(parsed.drawsStore[t]) && parsed.drawsStore[t].length > 0) {
+        drawsStore[t] = parsed.drawsStore[t].filter((d: any) => /^\d{4}$/.test(d?.number4D));
+      }
+    }
+  }
+  if (parsed.telegramConfig && typeof parsed.telegramConfig === 'object') {
+    telegramConfig = { ...telegramConfig, ...parsed.telegramConfig };
+  }
+  if (Array.isArray(parsed.telegramLogs)) {
+    telegramLogs = parsed.telegramLogs;
+  }
+}
 
 function loadPersistedStore() {
   try {
     if (!fs.existsSync(STORE_FILE)) return;
     const raw = fs.readFileSync(STORE_FILE, 'utf-8');
     if (!raw.trim()) return;
-    const parsed = JSON.parse(raw);
-
-    if (parsed.facebookScheduleConfig && typeof parsed.facebookScheduleConfig === 'object') {
-      facebookScheduleConfig = { ...facebookScheduleConfig, ...parsed.facebookScheduleConfig };
-    }
-    if (Array.isArray(parsed.facebookPostLogs)) {
-      facebookPostLogs = parsed.facebookPostLogs;
-    }
-    if (parsed.telegramConfig && typeof parsed.telegramConfig === 'object') {
-      telegramConfig = { ...telegramConfig, ...parsed.telegramConfig };
-    }
-    if (Array.isArray(parsed.telegramLogs)) {
-      telegramLogs = parsed.telegramLogs;
-    }
-    if (Array.isArray(parsed.liveDraws) && parsed.liveDraws.length > 0) {
-      liveDraws = parsed.liveDraws;
-    }
-    console.log(`[Store] Loaded persisted state from ${STORE_FILE}`);
+    applyParsedStore(JSON.parse(raw));
+    console.log(`[Store] Loaded persisted 4D store from ${STORE_FILE}`);
   } catch (err: any) {
-    console.warn('[Store] Failed to load persisted store, using defaults:', err?.message);
+    console.warn('[Store] Failed to load persisted 4D store:', err?.message);
   }
 }
 
-function savePersistedStore() {
+async function loadRemoteKvStore(): Promise<void> {
+  const kv = getKvConfig();
+  if (!kv) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`${kv.url}/get/${encodeURIComponent(KV_STORE_KEY)}`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${kv.token}` },
+      signal: controller.signal
+    });
+    if (!res.ok) return;
+    const data: any = await res.json().catch(() => null);
+    if (!data || data.result == null) return;
+    const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+    applyParsedStore(parsed);
+    console.log('[Store] Hydrated 4D store from Remote KV');
+  } catch (err: any) {
+    console.warn('[Store] Failed to hydrate from Remote KV:', err?.message);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+let storeHydratedPromise: Promise<void> | null = null;
+
+async function ensureStoreHydrated(): Promise<void> {
+  if (!getKvConfig()) return;
+  if (!storeHydratedPromise) {
+    storeHydratedPromise = loadRemoteKvStore().catch(() => {
+      storeHydratedPromise = null;
+    });
+  }
+  await storeHydratedPromise;
+}
+
+async function saveRemoteKvStore(payloadStr: string): Promise<void> {
+  const kv = getKvConfig();
+  if (!kv) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(kv.url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${kv.token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(['SET', KV_STORE_KEY, payloadStr]),
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      console.warn(`[Store] Remote KV save HTTP ${res.status}`);
+    }
+  } catch (err: any) {
+    console.warn('[Store] Failed to save Remote KV store:', err?.message);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function savePersistedStore(): Promise<void> {
+  const payloadStr = JSON.stringify(
+    {
+      updatedAt: new Date().toISOString(),
+      drawsStore,
+      telegramConfig,
+      telegramLogs: telegramLogs.slice(0, 100)
+    },
+    null,
+    2
+  );
+
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    const payload = {
-      updatedAt: new Date().toISOString(),
-      facebookScheduleConfig,
-      facebookPostLogs: facebookPostLogs.slice(0, 100),
-      telegramConfig,
-      telegramLogs: telegramLogs.slice(0, 100),
-      liveDraws
-    };
     const tmpFile = `${STORE_FILE}.tmp`;
-    fs.writeFileSync(tmpFile, JSON.stringify(payload, null, 2), 'utf-8');
+    fs.writeFileSync(tmpFile, payloadStr, 'utf-8');
     fs.renameSync(tmpFile, STORE_FILE);
   } catch (err: any) {
-    console.warn('[Store] Failed to persist store to disk:', err?.message);
+    console.warn('[Store] Failed to persist local 4D store:', err?.message);
   }
+
+  await saveRemoteKvStore(payloadStr);
 }
 
 loadPersistedStore();
 
-// Helper to generate algorithmic synthesis using all enabled sources & real positional stats
-function generateAlgorithmicFallback(
-  drawDate: string,
-  dayOfWeek: string,
-  sources: any[] = [],
-  lotteryType: LotteryType = 'gov'
-) {
-  return generateDynamicLotteryPrediction(
-    drawDate,
-    dayOfWeek,
-    new Date().toISOString().split('T')[0],
-    Array.isArray(sources) && sources.length > 0 ? sources : undefined,
-    lotteryType,
-    liveDraws
-  );
+// Security: timing-safe secret comparison & header extraction
+function timingSafeEqualStr(provided: string, expected: string): boolean {
+  if (!provided || !expected) return false;
+  const hashA = crypto.createHash('sha256').update(provided).digest();
+  const hashB = crypto.createHash('sha256').update(expected).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
 }
 
-// API: Analyze lottery with Gemini 4 Hydrogen (22 Sources + Positional 3-Digit Straight Focus)
-app.post('/api/analyze-lottery', async (req: Request, res: Response) => {
-  try {
-    const { drawDate, dayOfWeek, sources, customNotes, lotteryType } = req.body;
-    const safeLotteryType: LotteryType =
-      lotteryType === 'baac' || lotteryType === 'gsb' ? lotteryType : 'gov';
-    const lotteryMeta = LOTTERY_META_MAP[safeLotteryType];
+function extractProvidedSecret(req: Request, headerNames: string[], allowQuery = false): string {
+  const auth = req.get('authorization') || '';
+  if (/^bearer\s+/i.test(auth)) {
+    return auth.replace(/^bearer\s+/i, '').trim();
+  }
+  for (const h of headerNames) {
+    const val = (req.get(h) || '').trim();
+    if (val) return val;
+  }
+  if (allowQuery && typeof req.query.secret === 'string') {
+    return req.query.secret.trim();
+  }
+  return '';
+}
 
-    const enabledSources =
-      Array.isArray(sources) && sources.length > 0
-        ? sources.filter((s: any) => s.enabled)
-        : getSourcesForDayOfWeek(dayOfWeek);
+function isAdminAuthorized(req: Request): boolean {
+  const expected = (process.env.ADMIN_API_SECRET || '').trim();
+  if (!expected) return true;
+  const provided = extractProvidedSecret(req, ['x-admin-secret'], false);
+  return timingSafeEqualStr(provided, expected);
+}
 
-    const baseline = generateDynamicLotteryPrediction(
-      drawDate,
-      dayOfWeek,
-      new Date().toISOString().split('T')[0],
-      enabledSources,
-      safeLotteryType,
-      liveDraws
-    );
+function requireAdminSecret(req: Request, res: Response, next: NextFunction) {
+  if (!isAdminAuthorized(req)) {
+    return res.status(401).json({
+      success: false,
+      error: 'จำเป็นต้องยืนยันรหัส Admin Passcode (ADMIN_API_SECRET) ก่อนบันทึกหรือส่งข้อความ'
+    });
+  }
+  next();
+}
 
-    const sourcesSummaryText = enabledSources
-      .map(
-        (s: any, idx: number) =>
-          `${idx + 1}. ${s.name} [หมวด: ${s.category}, น้ำหนัก ${s.weight}%]: เด่น [${s.recentNumbers?.running?.join(', ')}], เจาะตำแหน่ง(ร้อย ${s.positionalFocus?.hundred || '-'}/สิบ ${s.positionalFocus?.ten || '-'}/หน่วย ${s.positionalFocus?.unit || '-'}), 3 ตัวตรง [${s.recentNumbers?.threeDigits?.join(', ')}], 2 ตัว [${s.recentNumbers?.twoDigits?.join(', ')}]`
-      )
-      .join('\n');
+function requireCronSecret(req: Request, res: Response, next: NextFunction) {
+  const expected = (process.env.CRON_SECRET || '').trim();
+  if (!expected) return next();
+  const provided = extractProvidedSecret(req, ['x-cron-secret'], true);
+  if (!timingSafeEqualStr(provided, expected)) {
+    return res.status(401).json({
+      ok: false,
+      error: 'Unauthorized cron request'
+    });
+  }
+  next();
+}
 
-    const positionalContext = baseline.granularStats
-      ? `สถิติเจาะทีละตำแหน่งจากฐานข้อมูล${lotteryMeta.name} (${baseline.granularStats.threeDigitStructure.historicalCohortSummary}):
-- หลักร้อยตัวเต็ง: ${baseline.granularStats.hundredAnalysis.map((c) => `${c.digit} (${c.probability}%)`).join(', ')}
-- หลักสิบบนตัวเต็ง: ${baseline.granularStats.tenAnalysis.map((c) => `${c.digit} (${c.probability}%)`).join(', ')}
-- หลักหน่วยบนตัวเต็ง: ${baseline.granularStats.unitAnalysis.map((c) => `${c.digit} (${c.probability}%)`).join(', ')}
-- เลขดับ/ตัดคู่ซ้ำที่คัดทิ้ง: ${baseline.granularStats.eliminatedDigits.map((e) => `${e.digitOrPair} (${e.reason})`).join(' | ')}`
-      : '';
+app.use('/api', async (req: Request, _res: Response, next: NextFunction) => {
+  if (req.path !== '/health') {
+    await ensureStoreHydrated();
+  }
+  next();
+});
 
-    const systemPrompt = `คุณคือระบบ AI ผู้เชี่ยวชาญด้านการวิเคราะห์ความน่าจะเป็นและสถิติ "${lotteryMeta.name}" (${lotteryMeta.scheduleLabel}).
-หน้าที่ของคุณคือสังเคราะห์ข้อมูลจาก ${enabledSources.length} แหล่งข้อมูลและโมเดลสถิติย้อนหลัง เพื่อฟันธง **"เลข 3 ตัวตรงๆ เน้นๆ"** แบบเจาะทีละตำแหน่ง (หลักร้อย -> หลักสิบ -> หลักหน่วย) สำหรับงวดที่ออกตรงกับ "${dayOfWeek}".
+function formatGeminiError(err: any): { status: number; message: string } {
+  const msg = String(err?.message || err || 'Gemini API error');
+  if (msg.includes('GEMINI_API_KEY') || msg.includes('API_KEY_INVALID') || msg.includes('PERMISSION_DENIED')) {
+    return {
+      status: 400,
+      message:
+        'ไม่พบหรือยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Settings > Secrets (หรือ Environment Variables บน Vercel) กรุณาตรวจสอบก่อนใช้งาน AI Smart Data Extractor'
+    };
+  }
+  if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('429')) {
+    return {
+      status: 429,
+      message: 'โควตา Gemini API ชั่วคราวเต็ม (429) กรุณารอสักครู่แล้วลองใหม่อีกครั้ง'
+    };
+  }
+  return { status: 500, message: `Gemini API Error: ${msg}` };
+}
 
-กฎสำคัญ:
-1. ประเภทสลากที่วิเคราะห์คือ "${lotteryMeta.name}" (${lotteryMeta.prizeFormatLabel}) และวันในสัปดาห์คือ "${dayOfWeek}" ห้ามนำเลขของงวดอื่นหรือประเภทอื่นมาใช้ซ้ำ!
-2. ต้องฟันธง **"เม็ดเดียว 3 ตัวตรง (megaSingleShot)"** 1 ชุดที่มั่นใจสูงสุด พร้อม **"ชุด 3 ตัวตรงเน้นหนัก 3 ชุดหลัก"** และเหตุผลเจาะทีละหลัก (หลักร้อย / หลักสิบ / หลักหน่วย)
-3. ต้องเคารพตัวกรองเลขดับและคู่ซ้ำจากงวดล่าสุด เพื่อตัดเลขโอกาสต่ำออกให้หมด
-4. ร่างบทวิเคราะห์เชิงลึกภาษาไทยที่อ้างอิงทั้งหลักร้อย-สิบ-หน่วย แต้มรวม 3 ตัว และข้อความโพสต์ Facebook ที่ชูชื่อ "${lotteryMeta.name}" และ 3 ตัวตรงๆ ฟันธงอย่างโดดเด่น`;
+function stripJsonMarkdown(text: string): string {
+  const trimmed = (text || '').trim();
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced && fenced[1]) return fenced[1].trim();
+  const arrStart = trimmed.indexOf('[');
+  const arrEnd = trimmed.lastIndexOf(']');
+  if (arrStart !== -1 && arrEnd > arrStart) {
+    return trimmed.slice(arrStart, arrEnd + 1);
+  }
+  const objStart = trimmed.indexOf('{');
+  const objEnd = trimmed.lastIndexOf('}');
+  if (objStart !== -1 && objEnd > objStart) {
+    return trimmed.slice(objStart, objEnd + 1);
+  }
+  return trimmed;
+}
 
-    const userPrompt = `กรุณาวิเคราะห์และวางเลขเด็ดฟันธงเน้นๆ แบบ 3 ตัวตรงๆ สำหรับ [${lotteryMeta.name}] งวดวันที่: ${drawDate} (ตรงกับ ${dayOfWeek})
+function normalizeDateFields(
+  lotteryType: Lottery4DType,
+  rawDate?: string,
+  rawIso?: string,
+  idxFallback = 0
+) {
+  let dateIso = (rawIso || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) {
+    dateIso = getScheduledDrawDateStepBack(lotteryType, idxFallback, new Date());
+  }
+  const parsed = new Date(`${dateIso}T12:00:00Z`);
+  const dayOfWeek = !Number.isNaN(parsed.getTime())
+    ? THAI_DAY_NAMES[parsed.getUTCDay()]
+    : 'วันพุธ';
+  const drawDate =
+    rawDate && rawDate.trim()
+      ? rawDate.trim()
+      : !Number.isNaN(parsed.getTime())
+        ? `${parsed.getUTCDate()} ${THAI_MONTH_NAMES[parsed.getUTCMonth()]} ${parsed.getUTCFullYear() + 543}`
+        : dateIso;
 
-${positionalContext}
+  return { dateIso, drawDate, dayOfWeek };
+}
 
-ข้อมูลทั้ง ${enabledSources.length} แหล่งและโมเดลสถิติที่เปิดใช้งาน:
-${sourcesSummaryText}
-${customNotes ? `\nบันทึก/เบาะแสเพิ่มเติมจากผู้ใช้: ${customNotes}` : ''}
+async function mergeDrawsIntoStore(
+  lotteryType: Lottery4DType,
+  incoming: Array<{ drawDate?: string; dateIso?: string; dayOfWeek?: string; number4D: string; rawPrize?: string }>,
+  source: DrawImportSource
+): Promise<{ addedCount: number; updatedDraws: LotteryDraw4D[] }> {
+  const existing = [...(drawsStore[lotteryType] || getDefault4DDraws(lotteryType))];
+  const byKey = new Map<string, LotteryDraw4D>();
 
-กรุณาส่งผลลัพธ์กลับมาเป็น JSON ที่สมบูรณ์ตาม schema โดยเน้นความเฉียบคมของชุด 3 ตัวตรงๆ เป็นหลัก`;
+  for (const item of existing) {
+    byKey.set(`${item.dateIso}:${item.number4D}`, item);
+  }
 
-    try {
-      if (!process.env.GEMINI_API_KEY) {
-        throw new Error('GEMINI_API_KEY not configured');
-      }
+  let addedCount = 0;
+  incoming.forEach((raw, idx) => {
+    const check = validateStrict4DNumber(raw.number4D, raw.rawPrize);
+    if (!check.valid) return;
 
-      const geminiPromise = ai.models.generateContent({
-        model: 'gemini-4-hydrogen',
-        contents: userPrompt,
-        config: {
-          systemInstruction: systemPrompt,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              confidenceScore: {
-                type: Type.INTEGER,
-                description: 'คะแนนความมั่นใจโดยรวม 80 ถึง 99'
-              },
-              megaSingleShot: {
-                type: Type.STRING,
-                description: 'เลขเด็ด 3 ตัวตรง เม็ดเดียวฟันธงขาด เช่น 427'
-              },
-              hundredDigits: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'เลขเจาะหลักร้อย 3 ตัวเรียงจากเด่นสุด'
-              },
-              topRunners: {
-                type: Type.ARRAY,
-                description: 'เลขวิ่ง-รูดเด่น 3 ตัว',
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    digit: { type: Type.STRING },
-                    score: { type: Type.INTEGER },
-                    reason: { type: Type.STRING }
-                  },
-                  required: ['digit', 'score', 'reason']
-                }
-              },
-              twoDigitsTop: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'เลข 2 ตัวบนคัดพิเศษ 6 ชุด'
-              },
-              twoDigitsBottom: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'เลข 2 ตัวล่างคัดพิเศษ 6 ชุด'
-              },
-              threeDigitsStraight: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'เลข 3 ตัวตรง VIP 6-8 ชุด เรียงตามความมั่นใจสูงสุด (ตัวแรกคือเม็ดเดียว)'
-              },
-              threeDigitsToad: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'เลข 3 ตัวโต๊ดกันพลาด 4-6 ชุด'
-              },
-              cautionDoubles: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'เลขระวังเบิ้ล 3 ชุด'
-              },
-              luckyDayPlanetaryNumbers: {
-                type: Type.ARRAY,
-                items: { type: Type.STRING },
-                description: 'เลขกำลังวันมงคล 4 ตัว'
-              },
-              aiNarrative: {
-                type: Type.STRING,
-                description: 'บทวิเคราะห์เชิงลึกโดยละเอียดภาษาไทย เจาะทีละหลัก ร้อย-สิบ-หน่วย และผลจาก 22 แหล่ง'
-              },
-              facebookCaption: {
-                type: Type.STRING,
-                description: 'ข้อความโพสต์ Facebook Page ชู 3 ตัวตรงๆ ฟันธง พร้อมอีโมจิและแฮชแท็ก'
-              }
-            },
-            required: [
-              'confidenceScore',
-              'megaSingleShot',
-              'hundredDigits',
-              'topRunners',
-              'twoDigitsTop',
-              'twoDigitsBottom',
-              'threeDigitsStraight',
-              'threeDigitsToad',
-              'cautionDoubles',
-              'aiNarrative',
-              'facebookCaption'
-            ]
-          }
-        }
-      });
-
-      const response = await Promise.race([
-        geminiPromise,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Gemini API timeout after 10s')), 10000)
-        )
-      ]);
-
-      const parsed = JSON.parse(response.text || '{}');
-      const straightList: string[] =
-        Array.isArray(parsed.threeDigitsStraight) && parsed.threeDigitsStraight.length >= 3
-          ? parsed.threeDigitsStraight
-          : baseline.threeDigitsStraight;
-
-      const megaShot =
-        typeof parsed.megaSingleShot === 'string' && parsed.megaSingleShot.length === 3
-          ? parsed.megaSingleShot
-          : straightList[0];
-
-      // Ensure megaShot sits at index 0 of straightList
-      const orderedStraight = [megaShot, ...straightList.filter((n) => n !== megaShot)].slice(0, 8);
-      const calcSum = (n: string) => Number(n[0] || 0) + Number(n[1] || 0) + Number(n[2] || 0);
-
-      const topRunnersList = Array.isArray(parsed.topRunners)
-        ? parsed.topRunners.map((r: any) => r.digit)
-        : baseline.topRunners.map((r) => r.digit);
-
-      const hundreds =
-        Array.isArray(parsed.hundredDigits) && parsed.hundredDigits.length >= 2
-          ? parsed.hundredDigits
-          : baseline.topSection.hundredDigits;
-
-      const coreStraightPicks = orderedStraight.slice(0, 3).map((num, idx) => ({
-        number: num,
-        tag: idx === 0 ? 'เม็ดเดียว 3 ตัวตรง ฟันธงขาด' : idx === 1 ? '3 ตัวตรง เน้นหนักอันดับ 2' : '3 ตัวตรง สูตรกำลังวัน',
-        votes: Math.max(12, Math.round(enabledSources.length * (0.86 - idx * 0.1))),
-        totalSources: enabledSources.length,
-        sum: calcSum(num),
-        reason:
-          idx === 0
-            ? `AI สังเคราะห์จาก ${enabledSources.length} แหล่ง · ล็อคหลักร้อย ${num[0]} · สิบ ${num[1]} · หน่วย ${num[2]}`
-            : `ชุดเน้นตรงแต้มรวม ${calcSum(num)} ตรงสถิติ ${dayOfWeek}`
-      }));
-
-      const backupStraightPicks = orderedStraight.slice(3, 6).map((num, idx) => ({
-        number: num,
-        tag: `ชุดกันพลาด #${idx + 1}`,
-        votes: Math.max(8, Math.round(enabledSources.length * (0.55 - idx * 0.05))),
-        totalSources: enabledSources.length,
-        sum: calcSum(num),
-        reason: `ชุดกันพลาดตำแหน่งหลักร้อย-สิบ-หน่วย`
-      }));
-
-      const win4Strategy = buildWin4Strategy(
-        [
-          hundreds[0] || megaShot[0],
-          topRunnersList[0] || megaShot[1],
-          topRunnersList[1] || megaShot[2],
-          topRunnersList[2] || baseline.topRunners[2]?.digit || '8',
-          ...(baseline.win4Strategy?.digits || [])
-        ],
-        hundreds,
-        `แผนลงทุนวิน 4 ตัว [${lotteryMeta.name}] คัดจาก 4 แกนหลักที่ชนสถิติและ AI สูงสุด`
-      );
-
-      const mergedResult = {
-        ...baseline,
-        ...parsed,
-        lotteryType: safeLotteryType,
-        lotteryName: lotteryMeta.name,
-        drawDate,
-        dayOfWeek,
-        totalSourcesAnalyzed: enabledSources.length,
-        win4Strategy,
-        threeDigitsStraight: win4Strategy.threeDigitStraightFocus,
-        topSection: {
-          ...baseline.topSection,
-          runningDigit: topRunnersList[0] || baseline.topSection.runningDigit,
-          runningSub: topRunnersList[1] || baseline.topSection.runningSub,
-          hundredDigits: hundreds,
-          tenDigits: [megaShot[1] || topRunnersList[0], topRunnersList[1] || baseline.topSection.tenDigits[1]],
-          unitDigits: [megaShot[2] || topRunnersList[1], topRunnersList[2] || baseline.topSection.unitDigits[1]],
-          twoDigitsTop: win4Strategy.twoDigitNoDouble.slice(0, 8),
-          threeDigitsStraight: win4Strategy.threeDigitStraightFocus,
-          threeDigitsToad: win4Strategy.threeDigitToad
-        },
-        bottomSection: {
-          ...baseline.bottomSection,
-          runningDigit: topRunnersList[0] || baseline.bottomSection.runningDigit,
-          runningSub: topRunnersList[2] || baseline.bottomSection.runningSub,
-          twoDigitsBottom: Array.isArray(parsed.twoDigitsBottom) && parsed.twoDigitsBottom.length > 0 ? parsed.twoDigitsBottom : baseline.twoDigitsBottom,
-          planetaryBottomPair: (Array.isArray(parsed.twoDigitsBottom) && parsed.twoDigitsBottom[0]) || baseline.bottomSection.planetaryBottomPair
-        },
-        sniperThreeStraight: {
-          megaSingleShot: megaShot,
-          consensusCount: coreStraightPicks[0]?.votes || Math.round(enabledSources.length * 0.85),
-          totalSources: enabledSources.length,
-          confidencePercent: Math.min(99, Math.max(95, Number(parsed.confidenceScore) || 97.6)),
-          positionBreakdown: {
-            hundred: megaShot[0] || hundreds[0],
-            ten: megaShot[1] || topRunnersList[0],
-            unit: megaShot[2] || topRunnersList[1],
-            hundredReason: baseline.granularStats?.hundredAnalysis[0]?.reason || `หลักร้อย ${megaShot[0]} คะแนนนำสูงสุด`,
-            tenReason: baseline.granularStats?.tenAnalysis[0]?.reason || `หลักสิบ ${megaShot[1]} ชนกำลังวัน`,
-            unitReason: baseline.granularStats?.unitAnalysis[0]?.reason || `หลักหน่วย ${megaShot[2]} สถิติเด่น`
-          },
-          coreStraightPicks,
-          backupStraightPicks
-        },
-        generatedAt: new Date().toISOString()
-      };
-
-      return res.json({ success: true, data: mergedResult, engine: 'gemini-4-hydrogen' });
-    } catch (geminiError: any) {
-      console.warn('Gemini API call failed, using high-precision fallback engine:', geminiError?.message);
-      const fallbackData = generateAlgorithmicFallback(drawDate, dayOfWeek, enabledSources, safeLotteryType);
-      return res.json({ success: true, data: fallbackData, engine: 'statistical-fallback', note: geminiError?.message });
+    const { dateIso, drawDate, dayOfWeek } = normalizeDateFields(lotteryType, raw.drawDate, raw.dateIso, idx);
+    const key = `${dateIso}:${check.number4D}`;
+    if (!byKey.has(key)) {
+      addedCount++;
     }
-  } catch (error: any) {
-    console.error('Error in /api/analyze-lottery:', error);
-    res.status(500).json({ success: false, error: error.message });
+    byKey.set(key, {
+      id: `${lotteryType}-${dateIso}-${check.number4D}`,
+      lotteryType,
+      drawDate,
+      dateIso,
+      dayOfWeek: raw.dayOfWeek || dayOfWeek,
+      number4D: check.number4D,
+      rawPrize: raw.rawPrize,
+      source
+    });
+  });
+
+  const sorted = Array.from(byKey.values()).sort((a, b) => b.dateIso.localeCompare(a.dateIso));
+  drawsStore[lotteryType] = sorted;
+  await savePersistedStore();
+  return { addedCount, updatedDraws: sorted };
+}
+
+// ================= 4D DATABASE & GEMINI SMART DATA EXTRACTOR ROUTES =================
+
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({ ok: true });
+});
+
+// Get current 4D draws for a country
+app.get('/api/4d/draws', (req: Request, res: Response) => {
+  const lotteryType = parseSafeLotteryType(req.query.lotteryType);
+  const draws = drawsStore[lotteryType] || getDefault4DDraws(lotteryType);
+  res.json({
+    success: true,
+    lotteryType,
+    draws
+  });
+});
+
+// Import verified 4D draws (from Auto-Fetch 10-draw audit or Image OCR preview)
+app.post('/api/4d/draws/import', async (req: Request, res: Response) => {
+  try {
+    const lotteryType = parseSafeLotteryType(req.body?.lotteryType);
+    const source: DrawImportSource =
+      req.body?.source === 'gemini-search' ||
+      req.body?.source === 'text-cleaner' ||
+      req.body?.source === 'image-ocr' ||
+      req.body?.source === 'manual'
+        ? req.body.source
+        : 'manual';
+
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (items.length === 0) {
+      return res.status(400).json({ success: false, error: 'ไม่มีรายการตัวเลข 4 หลักสำหรับนำเข้า' });
+    }
+
+    const validItems = items.filter((item: any) => validateStrict4DNumber(item?.number4D, item?.rawPrize).valid);
+    if (validItems.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'ไม่พบตัวเลข 4 หลักที่ถูกต้อง (ต้องเป็นตัวเลข 0000-9999 เท่านั้น)'
+      });
+    }
+
+    const { addedCount, updatedDraws } = await mergeDrawsIntoStore(lotteryType, validItems, source);
+    return res.json({
+      success: true,
+      lotteryType,
+      addedCount,
+      totalDraws: updatedDraws.length,
+      draws: updatedDraws
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Import failed' });
   }
 });
 
-// API: Post to Facebook Page (Real Graph API or Simulated mode)
-app.post('/api/facebook/post', async (req: Request, res: Response) => {
+// Reset draws back to default 200-draw archive
+app.post('/api/4d/draws/reset', async (req: Request, res: Response) => {
+  const lotteryType = parseSafeLotteryType(req.body?.lotteryType);
+  drawsStore[lotteryType] = [...getDefault4DDraws(lotteryType)];
+  await savePersistedStore();
+  return res.json({
+    success: true,
+    lotteryType,
+    draws: drawsStore[lotteryType]
+  });
+});
+
+// MODE 1: Auto-Fetch via Google Search Grounding (Strict 4D Parsing Validation + 10-draw visual audit preview)
+app.post('/api/4d/extract/auto-fetch', async (req: Request, res: Response) => {
   try {
-    const { pageId, pageAccessToken, message, drawDate, isSimulated } = req.body;
-
-    if (!message) {
-      return res.status(400).json({ success: false, error: 'Message content is required.' });
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(400).json({
+        success: false,
+        error: 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Settings > Secrets สำหรับใช้ Google Search Grounding'
+      });
     }
 
-    // If real Facebook Page credentials provided and user didn't force simulation
-    if (pageId && pageAccessToken && !isSimulated) {
-      try {
-        const graphUrl = `https://graph.facebook.com/v19.0/${pageId}/feed`;
-        const fbResponse = await fetch(graphUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: message,
-            access_token: pageAccessToken
-          })
-        });
+    const lotteryType = parseSafeLotteryType(req.body?.lotteryType);
+    const count = Math.min(50, Math.max(5, Number(req.body?.count) || 20));
+    const meta = LOTTERY_4D_META_MAP[lotteryType];
 
-        const fbResult: any = await fbResponse.json();
+    const prompt = `ค้นหาผลรางวัลงวดย้อนหลังจริงของ "${meta.name}" (${meta.countryName}) จำนวน ${count} งวดล่าสุด เรียงลำดับจากงวดล่าสุดไปเก่าสุด
 
-        if (!fbResponse.ok || fbResult.error) {
-          const errDetail = fbResult?.error?.message || 'Facebook API returned error';
-          console.warn('Facebook Graph API error:', errDetail);
+กฎ Strict 4D Parsing Validation (ห้ามผิดพลาดเด็ดขาด):
+- ${meta.strictParsingRule}
+- ห้ามดึงเลข 4 ตัวหน้า, ห้ามดึงเลข 3 ตัวหน้า/ท้าย, และห้ามดึงรางวัลข้างเคียง
+- ตัวเลข 4 หลัก (number4D) ต้องเป็นตัวเลข 0000-9999 จำนวน 4 ตัวตรงเป๊ะเท่านั้น
 
-          // Log failure
-          const failedLog: FacebookPostLog = {
-            id: `log-${Date.now()}`,
-            timestamp: new Date().toISOString(),
-            drawDate: drawDate || 'งวดปัจจุบัน',
-            message,
-            status: 'failed',
-            errorMessage: errDetail
-          };
-          facebookPostLogs.unshift(failedLog);
-          savePersistedStore();
+กรุณาส่งผลลัพธ์เป็น JSON Array เท่านั้น (ไม่ต้องมีข้อความอธิบายอื่น) โดยแต่ละ element มีรูปแบบ:
+{
+  "drawDate": "วันที่งวด เช่น 25 พฤศจิกายน 2569",
+  "dateIso": "YYYY-MM-DD (ค.ศ.)",
+  "rawPrize": "เลขรางวัลหลักเต็ม (เช่น 6 หลักสำหรับไทย หรือ 5 หลักสำหรับฮานอย)",
+  "number4D": "เลขท้าย 4 ตัวของรางวัลหลักเท่านั้น เช่น 5654"
+}`;
 
-          return res.status(400).json({
-            success: false,
-            error: `Facebook Graph API Error: ${errDetail}`,
-            suggestion: 'สามารถใช้โหมดจำลอง (Simulated Mode) เพื่อทดสอบโพสต์และสร้างลิงก์แชร์ได้ทันที'
-          });
-        }
-
-        // Successfully posted to Facebook
-        const postLog: FacebookPostLog = {
-          id: `log-${Date.now()}`,
-          timestamp: new Date().toISOString(),
-          drawDate: drawDate || 'งวดปัจจุบัน',
-          message,
-          status: 'published',
-          facebookPostId: fbResult.id,
-          reach: 1,
-          permalinkUrl: `https://facebook.com/${fbResult.id}`
-        };
-        facebookPostLogs.unshift(postLog);
-        savePersistedStore();
-
-        return res.json({
-          success: true,
-          data: {
-            postId: fbResult.id,
-            timestamp: postLog.timestamp,
-            mode: 'live-facebook-graph-api'
-          }
-        });
-      } catch (fbFetchErr: any) {
-        return res.status(500).json({
-          success: false,
-          error: `Network error connecting to Facebook: ${fbFetchErr.message}`
-        });
+    const response = await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: prompt,
+      config: {
+        systemInstruction:
+          'You are a strict lottery data extractor. Use Google Search to verify actual recent draws. Return ONLY a valid JSON array with exact 4-digit strings in number4D taken strictly from the LAST 4 digits of the primary prize.',
+        tools: [{ googleSearch: {} }]
       }
+    });
+
+    const rawText = stripJsonMarkdown(response.text || '[]');
+    let parsedList: any[] = [];
+    try {
+      const parsed = JSON.parse(rawText);
+      parsedList = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.draws) ? parsed.draws : [];
+    } catch {
+      return res.status(422).json({
+        success: false,
+        error: 'AI ค้นหาข้อมูลแล้วแต่ไม่สามารถแปลงเป็น JSON 4 หลักได้ กรุณาลองกดดึงข้อมูลอีกครั้ง'
+      });
     }
 
-    // Simulated / Test Post Mode
-    const simulatedPostId = `mock_fb_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-    const simLog: FacebookPostLog = {
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      drawDate: drawDate || 'งวดปัจจุบัน',
-      message,
-      status: 'simulated',
-      facebookPostId: simulatedPostId,
-      reach: Math.floor(Math.random() * 3000) + 1200,
-      permalinkUrl: `https://facebook.com/permalink.php?story_fbid=${simulatedPostId}`
-    };
-    facebookPostLogs.unshift(simLog);
-    savePersistedStore();
+    const candidates = parsedList
+      .map((item, idx) => {
+        const validation = validateStrict4DNumber(String(item?.number4D || ''), String(item?.rawPrize || ''));
+        const { dateIso, drawDate, dayOfWeek } = normalizeDateFields(lotteryType, item?.drawDate, item?.dateIso, idx);
+        return {
+          id: `fetch-${lotteryType}-${dateIso}-${idx}`,
+          drawDate,
+          dateIso,
+          dayOfWeek,
+          rawPrize: item?.rawPrize ? String(item.rawPrize).replace(/\D/g, '') : undefined,
+          number4D: validation.number4D,
+          isValid4D: validation.valid,
+          validationNote: validation.note,
+          selected: validation.valid
+        };
+      })
+      .filter((c) => c.number4D.length > 0);
+
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const groundingSources: GroundingSourceLink[] = groundingChunks
+      .map((c: any) => c?.web)
+      .filter((w: any) => w?.uri)
+      .map((w: any) => ({
+        title: String(w.title || w.uri),
+        uri: String(w.uri)
+      }))
+      .slice(0, 6);
 
     return res.json({
       success: true,
-      data: {
-        postId: simulatedPostId,
-        timestamp: simLog.timestamp,
-        mode: 'simulated-successful',
-        reach: simLog.reach,
-        message: 'โพสต์ทดสอบสำเร็จเสมือนจริงบนระบบ พร้อมแสดงผลในฟีดและบันทึกลงคิวอัตโนมัติ'
-      }
+      lotteryType,
+      candidates,
+      groundingSources
     });
-  } catch (error: any) {
-    console.error('Error in /api/facebook/post:', error);
-    res.status(500).json({ success: false, error: error.message });
+  } catch (err: any) {
+    const formatted = formatGeminiError(err);
+    return res.status(formatted.status).json({ success: false, error: formatted.message });
   }
 });
 
-// API: Get Facebook settings & Post Logs
-app.get('/api/facebook/config', (req: Request, res: Response) => {
-  res.json({
-    success: true,
-    config: facebookScheduleConfig,
-    logs: facebookPostLogs
-  });
+// AUTO-VERIFY LATEST DRAW: Fetch the single latest draw via Google Search Grounding & auto-merge into store
+app.post('/api/4d/verify-latest', async (req: Request, res: Response) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(400).json({
+        success: false,
+        error: 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY สำหรับตรวจผลรางวัลล่าสุดอัตโนมัติ'
+      });
+    }
+
+    const lotteryType = parseSafeLotteryType(req.body?.lotteryType);
+    const meta = LOTTERY_4D_META_MAP[lotteryType];
+
+    const prompt = `ค้นหาผลรางวัล "งวดล่าสุดที่ออกแล้ว" ของ "${meta.name}" (${meta.countryName}) จำนวน 3 งวดล่าสุด เรียงจากงวดล่าสุดไปเก่าสุด
+กฎ Strict 4D Parsing Validation:
+- ${meta.strictParsingRule}
+- ส่งกลับเป็น JSON Array ที่มี object รูปแบบ: {"drawDate": "วันที่งวด", "dateIso": "YYYY-MM-DD", "rawPrize": "เลขรางวัลหลักเต็ม", "number4D": "เลข 4 ตัวท้ายตรงเป๊ะ (0000-9999)"} เท่านั้น`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: prompt,
+      config: {
+        systemInstruction:
+          'You are a strict lottery result verifier. Use Google Search to get the latest official draw result. Return ONLY a JSON array.',
+        tools: [{ googleSearch: {} }]
+      }
+    });
+
+    const rawText = stripJsonMarkdown(response.text || '[]');
+    let parsedList: any[] = [];
+    try {
+      const parsed = JSON.parse(rawText);
+      parsedList = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.draws) ? parsed.draws : [];
+    } catch {
+      return res.status(422).json({
+        success: false,
+        error: 'ไม่สามารถแปลงผลตรวจรางวัลงวดล่าสุดเป็น JSON 4 หลักได้ กรุณาลองอีกครั้ง'
+      });
+    }
+
+    const validItems = parsedList
+      .map((item: any, idx: number) => {
+        const check = validateStrict4DNumber(String(item?.number4D || ''), String(item?.rawPrize || ''));
+        if (!check.valid) return null;
+        const { dateIso, drawDate, dayOfWeek } = normalizeDateFields(lotteryType, item?.drawDate, item?.dateIso, idx);
+        return {
+          drawDate,
+          dateIso,
+          dayOfWeek,
+          rawPrize: item?.rawPrize ? String(item.rawPrize).replace(/\D/g, '') : undefined,
+          number4D: check.number4D
+        };
+      })
+      .filter(Boolean) as Array<{
+      drawDate: string;
+      dateIso: string;
+      dayOfWeek: string;
+      rawPrize?: string;
+      number4D: string;
+    }>;
+
+    if (validItems.length === 0) {
+      return res.status(422).json({
+        success: false,
+        error: 'ไม่พบผลรางวัล 4 หลักที่ผ่านเกณฑ์ตรวจสอบสำหรับงวดล่าสุด'
+      });
+    }
+
+    // Build honest pre-draw prediction scorecard BEFORE merging the new result
+    const latest = validItems[0];
+    const priorDraws = [...(drawsStore[lotteryType] || getDefault4DDraws(lotteryType))];
+    const priorHistory = priorDraws.filter((d) => d.dateIso !== latest.dateIso);
+    const priorPred = build4DPredictionSummary(
+      priorHistory.length >= 10 ? priorHistory : priorDraws,
+      lotteryType
+    );
+
+    const actual4D = latest.number4D;
+    const actual3D = actual4D.slice(-3);
+    const actual2D = actual4D.slice(-2);
+
+    const digitOverlap = (a: string, b: string) => {
+      const counts: Record<string, number> = {};
+      for (const ch of b) counts[ch] = (counts[ch] || 0) + 1;
+      let hit = 0;
+      for (const ch of a) {
+        if (counts[ch] && counts[ch] > 0) {
+          hit++;
+          counts[ch]--;
+        }
+      }
+      return hit;
+    };
+
+    const matchedSources = priorPred.sources22.filter((s) => {
+      let posMatch = 0;
+      for (let i = 0; i < 4; i++) {
+        if (s.candidate4D[i] === actual4D[i]) posMatch++;
+      }
+      return posMatch >= 2 || digitOverlap(s.candidate4D, actual4D) >= 3;
+    });
+
+    let scorecard: PostDrawScorecard;
+    if (priorPred.strategyMode === 'win4_3d') {
+      const focusSets = priorPred.win4Breakdown.threeDigitStraightSets;
+      const all24 = priorPred.win4Breakdown.threeDigitStraight24Sets;
+      const dblHedge = priorPred.win4Breakdown.threeDigitDoubleHedgeSets;
+      const inFocus = focusSets.includes(actual3D);
+      const in24 = all24.includes(actual3D);
+      const inHedge = dblHedge.includes(actual3D);
+      const in2D = priorPred.win4Breakdown.twoDigitNoDouble12.includes(actual2D) ||
+        priorPred.win4Breakdown.twoDigitDoubles4.includes(actual2D);
+      const bestOverlap = Math.max(...focusSets.map((f) => digitOverlap(f, actual3D)), 0);
+
+      let hitStatus: PostDrawScorecard['hitStatus'] = 'miss';
+      let hitMessage = `งวดนี้หลุดกรอบวิน 4 ตัว [${priorPred.win4Breakdown.coreDigits4.join('-')}] (ระบบบันทึกผลและปรับน้ำหนัก 22 แหล่งแล้ว)`;
+
+      if (inFocus) {
+        hitStatus = 'exact_focus';
+        hitMessage = `เข้าเป้าเต็ม! 3 ตัวท้าย ${actual3D} ตรงกับ 4 ชุดเน้นหลัก (${focusSets.join(' · ')})`;
+      } else if (in24) {
+        hitStatus = 'hit_24';
+        hitMessage = `เข้าวิน 24 ชุด! 3 ตัวท้าย ${actual3D} อยู่ในชุดแตก 3 ตัว 24 ชุดจากแกน [${priorPred.win4Breakdown.coreDigits4.join('-')}]`;
+      } else if (inHedge) {
+        hitStatus = 'hit_24';
+        hitMessage = `เข้าชุดกันเบิ้ล/หาม! 3 ตัวท้าย ${actual3D} ตรงกับชุดกันเบิ้ลจากแกนวิน`;
+      } else if (in2D) {
+        hitStatus = 'hit_2d';
+        hitMessage = `เข้า 2 ตัวท้าย ${actual2D} ในชุดวิน 2 ตัวประคองทุน`;
+      } else if (bestOverlap >= 2) {
+        hitStatus = 'near_miss';
+        hitMessage = `เฉียดเข้าใกล้ (Near-Miss): แกนวิน [${priorPred.win4Breakdown.coreDigits4.join('-')}] ติดตรง 2 ใน 3 หลักของ ${actual3D}`;
+      }
+
+      scorecard = {
+        drawDate: latest.drawDate,
+        actual4D,
+        actual3D,
+        predictedHeadline: `แกน [${priorPred.win4Breakdown.coreDigits4.join('-')}] · เน้น ${priorPred.win4Breakdown.megaThreeStraight}`,
+        predictedSets: focusSets,
+        hitStatus,
+        hitMessage,
+        matchedSourcesCount22: matchedSources.length,
+        topMatchedSources: matchedSources.slice(0, 4).map((s) => `${s.sourceName} (${s.candidate4D})`)
+      };
+    } else {
+      const sniperNums = priorPred.sniperSets.map((s) => s.number4D);
+      const exact4D = sniperNums.includes(actual4D) || priorPred.superNumber4D === actual4D;
+      const toad4D = sniperNums.some((s) => s.split('').sort().join('') === actual4D.split('').sort().join(''));
+      const hit3Back = sniperNums.some((s) => s.slice(-3) === actual3D);
+      const hit2Back = priorPred.backupTwoBack.includes(actual2D) || sniperNums.some((s) => s.slice(-2) === actual2D);
+      const bestOverlap = Math.max(...sniperNums.map((s) => digitOverlap(s, actual4D)), 0);
+
+      let hitStatus: PostDrawScorecard['hitStatus'] = 'miss';
+      let hitMessage = `งวดนี้ยังไม่เข้าชุดหลัก (ระบบบันทึกผล ${actual4D} และปรับน้ำหนัก Adaptive 22 แหล่งเรียบร้อย)`;
+
+      if (exact4D) {
+        hitStatus = 'hit_4d';
+        hitMessage = `เข้า 4 ตัวตรง! ผลจริง ${actual4D} ตรงกับชุด Diverse Sniper / Super 4D`;
+      } else if (toad4D || hit3Back) {
+        hitStatus = 'exact_focus';
+        hitMessage = toad4D
+          ? `เข้า 4 ตัวโต๊ด! ชุด Sniper มีเลขครบ 4 หลักของผลจริง ${actual4D}`
+          : `เข้า 3 ตัวท้าย ${actual3D}! ตรง 3 หลักท้ายจากชุด Sniper 4D`;
+      } else if (hit2Back) {
+        hitStatus = 'hit_2d';
+        hitMessage = `เข้า 2 ตัวท้าย ${actual2D} ในชุด Sniper / 2 ตัวประคองพอร์ต`;
+      } else if (bestOverlap >= 3) {
+        hitStatus = 'near_miss';
+        hitMessage = `เฉียดเข้าใกล้ (Near-Miss 3/4 หลัก): ชุด Sniper ติดตัวเลขหลักของ ${actual4D} ถึง 3 ตัว`;
+      }
+
+      scorecard = {
+        drawDate: latest.drawDate,
+        actual4D,
+        actual3D,
+        predictedHeadline: `Super ${priorPred.superNumber4D}`,
+        predictedSets: sniperNums,
+        hitStatus,
+        hitMessage,
+        matchedSourcesCount22: matchedSources.length,
+        topMatchedSources: matchedSources.slice(0, 4).map((s) => `${s.sourceName} (${s.candidate4D})`)
+      };
+    }
+
+    const { addedCount, updatedDraws } = await mergeDrawsIntoStore(lotteryType, validItems, 'gemini-search');
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const groundingSources: GroundingSourceLink[] = groundingChunks
+      .map((c: any) => c?.web)
+      .filter((w: any) => w?.uri)
+      .map((w: any) => ({
+        title: String(w.title || w.uri),
+        uri: String(w.uri)
+      }))
+      .slice(0, 4);
+
+    return res.json({
+      success: true,
+      lotteryType,
+      addedCount,
+      latestVerified: validItems[0],
+      scorecard,
+      draws: updatedDraws,
+      groundingSources
+    });
+  } catch (err: any) {
+    const formatted = formatGeminiError(err);
+    return res.status(formatted.status).json({ success: false, error: formatted.message });
+  }
 });
 
-// API: Update Facebook schedule config
-app.post('/api/facebook/config', (req: Request, res: Response) => {
-  const newConfig = req.body;
-  facebookScheduleConfig = {
-    ...facebookScheduleConfig,
-    ...newConfig
-  };
-  savePersistedStore();
-  res.json({
-    success: true,
-    savedAt: new Date().toISOString(),
-    config: facebookScheduleConfig
-  });
+// MODE 2: Smart Text Cleaner (Gemini Structured Output JSON Schema -> auto validate & save immediately)
+app.post('/api/4d/extract/text', async (req: Request, res: Response) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(400).json({
+        success: false,
+        error: 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Settings > Secrets สำหรับใช้ AI กลั่นกรองข้อความ'
+      });
+    }
+
+    const lotteryType = parseSafeLotteryType(req.body?.lotteryType);
+    const rawText = String(req.body?.rawText || '').trim();
+    if (!rawText) {
+      return res.status(400).json({ success: false, error: 'กรุณาวางข้อความดิบก่อนกดให้ AI กลั่นกรองตัวเลข' });
+    }
+
+    const meta = LOTTERY_4D_META_MAP[lotteryType];
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: `จงสกัดเอาเฉพาะชุดตัวเลข 4 หลักของรางวัลหลักสำหรับ "${meta.name}" จากข้อความด้านล่างนี้ (เรียงจากงวดล่าสุดไปเก่าสุด):
+กฎ: ${meta.strictParsingRule}
+ตัดข้อความขยะ วันที่ เวลา ราคา และรางวัล 2-3 ตัวที่ไม่เกี่ยวข้องทิ้งทั้งหมด หากรางวัลหลักมี 5-6 หลัก ให้เก็บ rawPrize เต็มไว้และตัดเอาเฉพาะ 4 หลักท้ายใส่ใน number4D
+
+ข้อความดิบ:
+${rawText}`,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            extractedDraws: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  drawDate: { type: Type.STRING, description: 'วันที่งวดถ้ามีในข้อความ เช่น 16 พฤศจิกายน 2569' },
+                  dateIso: { type: Type.STRING, description: 'YYYY-MM-DD ถ้ามีในข้อความ' },
+                  rawPrize: { type: Type.STRING, description: 'ตัวเลขรางวัลหลักเต็ม (ถ้ามี)' },
+                  number4D: { type: Type.STRING, description: 'ตัวเลข 4 หลักท้ายของรางวัลหลักเท่านั้น (0000-9999)' }
+                },
+                required: ['number4D']
+              }
+            }
+          },
+          required: ['extractedDraws']
+        }
+      }
+    });
+
+    const parsed = JSON.parse(response.text || '{"extractedDraws":[]}');
+    const rawList = Array.isArray(parsed?.extractedDraws) ? parsed.extractedDraws : [];
+
+    const validatedDraws = rawList
+      .map((item: any, idx: number) => {
+        const check = validateStrict4DNumber(String(item?.number4D || ''), String(item?.rawPrize || ''));
+        if (!check.valid) return null;
+        const { dateIso, drawDate, dayOfWeek } = normalizeDateFields(lotteryType, item?.drawDate, item?.dateIso, idx);
+        return {
+          drawDate,
+          dateIso,
+          dayOfWeek,
+          rawPrize: item?.rawPrize ? String(item.rawPrize).replace(/\D/g, '') : undefined,
+          number4D: check.number4D
+        };
+      })
+      .filter(Boolean) as Array<{
+      drawDate: string;
+      dateIso: string;
+      dayOfWeek: string;
+      rawPrize?: string;
+      number4D: string;
+    }>;
+
+    if (validatedDraws.length === 0) {
+      return res.status(422).json({
+        success: false,
+        error: 'ไม่พบชุดตัวเลข 4 หลัก (0000-9999) ที่ถูกต้องในข้อความที่วาง'
+      });
+    }
+
+    const { addedCount, updatedDraws } = await mergeDrawsIntoStore(lotteryType, validatedDraws, 'text-cleaner');
+
+    return res.json({
+      success: true,
+      lotteryType,
+      extractedCount: validatedDraws.length,
+      addedCount,
+      extractedItems: validatedDraws,
+      draws: updatedDraws
+    });
+  } catch (err: any) {
+    const formatted = formatGeminiError(err);
+    return res.status(formatted.status).json({ success: false, error: formatted.message });
+  }
 });
+
+// MODE 3: Image/Screenshot OCR (Gemini Multimodal -> returns Preview candidates before saving)
+app.post('/api/4d/extract/image', async (req: Request, res: Response) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(400).json({
+        success: false,
+        error: 'ยังไม่ได้ตั้งค่า GEMINI_API_KEY ใน Settings > Secrets สำหรับสแกนรูปภาพ OCR'
+      });
+    }
+
+    const lotteryType = parseSafeLotteryType(req.body?.lotteryType);
+    const imageBase64 = String(req.body?.imageBase64 || '').trim();
+    const mimeType = String(req.body?.mimeType || 'image/png').trim();
+
+    if (!imageBase64) {
+      return res.status(400).json({ success: false, error: 'กรุณาอัปโหลดรูปภาพตารางสถิติหวย (JPG/PNG)' });
+    }
+
+    const meta = LOTTERY_4D_META_MAP[lotteryType];
+
+    const imagePart = {
+      inlineData: {
+        mimeType,
+        data: imageBase64.replace(/^data:image\/\w+;base64,/, '')
+      }
+    };
+    const textPart = {
+      text: `อ่านตัวเลขรางวัลหลักจากรูปภาพตารางสถิติ "${meta.name}" นี้ทั้งหมด (เรียงจากงวดบน/ล่าสุดลงล่าง)
+กฎ: ${meta.strictParsingRule}
+ให้สกัดเฉพาะเลขท้าย 4 ตัวของรางวัลหลัก (number4D ต้องเป็นเลข 4 หลัก 0000-9999 เท่านั้น) ห้ามเอาวันที่หรือเลข 2-3 ตัวปนเข้ามา`
+    };
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: { parts: [imagePart, textPart] },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            extractedDraws: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  drawDate: { type: Type.STRING },
+                  dateIso: { type: Type.STRING },
+                  rawPrize: { type: Type.STRING },
+                  number4D: { type: Type.STRING }
+                },
+                required: ['number4D']
+              }
+            }
+          },
+          required: ['extractedDraws']
+        }
+      }
+    });
+
+    const parsed = JSON.parse(response.text || '{"extractedDraws":[]}');
+    const rawList = Array.isArray(parsed?.extractedDraws) ? parsed.extractedDraws : [];
+
+    const candidates = rawList
+      .map((item: any, idx: number) => {
+        const check = validateStrict4DNumber(String(item?.number4D || ''), String(item?.rawPrize || ''));
+        const { dateIso, drawDate, dayOfWeek } = normalizeDateFields(lotteryType, item?.drawDate, item?.dateIso, idx);
+        return {
+          id: `ocr-${lotteryType}-${idx}`,
+          drawDate,
+          dateIso,
+          dayOfWeek,
+          rawPrize: item?.rawPrize ? String(item.rawPrize).replace(/\D/g, '') : undefined,
+          number4D: check.number4D,
+          isValid4D: check.valid,
+          validationNote: check.note,
+          selected: check.valid
+        };
+      })
+      .filter((c: any) => c.number4D.length > 0);
+
+    return res.json({
+      success: true,
+      lotteryType,
+      candidates
+    });
+  } catch (err: any) {
+    const formatted = formatGeminiError(err);
+    return res.status(formatted.status).json({ success: false, error: formatted.message });
+  }
+});
+
+// ================= TELEGRAM GROUP BOT API (Super Number 4D + Defensive Scaling) =================
 
 function maskSecretValue(val?: string, head = 4, tail = 4): string {
   const trimmed = (val || '').trim();
@@ -606,8 +963,6 @@ function maskSecretValue(val?: string, head = 4, tail = 4): string {
   if (trimmed.length <= head + tail) return '••••••••';
   return `${trimmed.slice(0, head)}••••••••${trimmed.slice(-tail)}`;
 }
-
-// ================= TELEGRAM GROUP BOT API =================
 
 function getTelegramEnvSecrets() {
   return {
@@ -622,7 +977,10 @@ function getTelegramEnvStatus() {
     hasBotToken: Boolean(env.botToken),
     botTokenPreview: maskSecretValue(env.botToken, 6, 4),
     hasChatId: Boolean(env.chatId),
-    chatIdPreview: maskSecretValue(env.chatId, 4, 4)
+    chatIdPreview: maskSecretValue(env.chatId, 4, 4),
+    hasKvPersistence: Boolean(getKvConfig()),
+    hasCronSecret: Boolean((process.env.CRON_SECRET || '').trim()),
+    hasAdminSecret: Boolean((process.env.ADMIN_API_SECRET || '').trim())
   };
 }
 
@@ -697,7 +1055,7 @@ async function dispatchTelegramMessage(params: {
       chatSummary: `Telegram (${chatTitle})`
     };
     telegramLogs.unshift(log);
-    savePersistedStore();
+    await savePersistedStore();
     return { mode: 'live-telegram-group', log };
   }
 
@@ -710,36 +1068,38 @@ async function dispatchTelegramMessage(params: {
     chatSummary: 'โหมดจำลอง (Telegram Group)'
   };
   telegramLogs.unshift(simLog);
-  savePersistedStore();
+  await savePersistedStore();
   return { mode: 'simulated-successful', log: simLog };
 }
 
-// Lightweight health endpoint for cron-job.org / UptimeRobot
-app.get('/api/health', (req: Request, res: Response) => {
-  res.json({ ok: true });
-});
-
-// API: Get Telegram config & logs
 app.get('/api/telegram/config', (req: Request, res: Response) => {
   if (req.query.ping === '1') {
     return res.json({ ok: true });
   }
+  const authorized = isAdminAuthorized(req);
+  const safeConfig = authorized
+    ? telegramConfig
+    : {
+        ...telegramConfig,
+        botToken: '',
+        chatId: telegramConfig.chatId ? maskSecretValue(telegramConfig.chatId, 3, 3) : ''
+      };
   res.json({
     success: true,
-    config: telegramConfig,
+    adminAuthorized: authorized,
+    config: safeConfig,
     envStatus: getTelegramEnvStatus(),
     logs: telegramLogs.slice(0, 25)
   });
 });
 
-// API: Update Telegram config
-app.post('/api/telegram/config', (req: Request, res: Response) => {
+app.post('/api/telegram/config', requireAdminSecret, async (req: Request, res: Response) => {
   const newConfig = req.body;
   telegramConfig = {
     ...telegramConfig,
     ...newConfig
   };
-  savePersistedStore();
+  await savePersistedStore();
   res.json({
     success: true,
     savedAt: new Date().toISOString(),
@@ -748,8 +1108,7 @@ app.post('/api/telegram/config', (req: Request, res: Response) => {
   });
 });
 
-// API: Verify Telegram Bot Token & discover recent Group / Channel Chat IDs via getUpdates
-app.post('/api/telegram/verify', async (req: Request, res: Response) => {
+app.post('/api/telegram/verify', requireAdminSecret, async (req: Request, res: Response) => {
   try {
     const envSecrets = getTelegramEnvSecrets();
     const tokenToCheck =
@@ -773,7 +1132,6 @@ app.post('/api/telegram/verify', async (req: Request, res: Response) => {
       });
     }
 
-    // Fetch recent updates to help auto-discover Group / Supergroup / Channel Chat IDs
     const updatesRes = await fetch(`https://api.telegram.org/bot${tokenToCheck}/getUpdates?limit=30`);
     const updatesData: any = await updatesRes.json().catch(() => ({}));
     const chatMap = new Map<string, { chatId: string; title: string; type: string; username?: string }>();
@@ -819,8 +1177,7 @@ app.post('/api/telegram/verify', async (req: Request, res: Response) => {
   }
 });
 
-// API: Send or test Telegram Group alert
-app.post('/api/telegram/send', async (req: Request, res: Response) => {
+app.post('/api/telegram/send', requireAdminSecret, async (req: Request, res: Response) => {
   try {
     const {
       botToken,
@@ -861,10 +1218,7 @@ app.post('/api/telegram/send', async (req: Request, res: Response) => {
         isSimulated: Boolean(isSimulated)
       });
 
-      return res.json({
-        success: true,
-        data: result
-      });
+      return res.json({ success: true, data: result });
     } catch (sendErr: any) {
       const failLog: TelegramLogItem = {
         id: `tg-err-${Date.now()}`,
@@ -875,130 +1229,82 @@ app.post('/api/telegram/send', async (req: Request, res: Response) => {
         errorMessage: sendErr.message
       };
       telegramLogs.unshift(failLog);
-      savePersistedStore();
+      await savePersistedStore();
       return res.status(400).json({
         success: false,
-        error: `Telegram API Error: ${sendErr.message}`,
-        suggestion: 'ตรวจสอบว่าได้เชิญ Bot เข้ากลุ่ม Telegram แล้ว และกรอก Bot Token กับ Group Chat ID (-100...) ถูกต้อง'
+        error: `Telegram API Error: ${sendErr.message}`
       });
     }
   } catch (error: any) {
-    console.error('Error in /api/telegram/send:', error);
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// API: Get live draws and real-time computed accuracy (supports ?lotteryType=gov|baac|gsb)
-app.get('/api/lottery/draws', (req: Request, res: Response) => {
-  const rawType = String(req.query.lotteryType || 'gov');
-  const safeType: LotteryType = rawType === 'baac' || rawType === 'gsb' ? rawType : 'gov';
-  const drawsForType = getHistoricalDrawsByType(safeType, liveDraws);
-  const accuracy = evaluateRealDatabaseAccuracy(drawsForType);
-  res.json({
-    success: true,
-    lotteryType: safeType,
-    draws: drawsForType,
-    accuracy
-  });
-});
-
-// API: Record new draw result in Real-Time & immediately re-evaluate accuracy
-app.post('/api/lottery/add-draw', (req: Request, res: Response) => {
-  try {
-    const { drawDate, dateIso, dayOfWeek, firstPrize, last2Digits, first3Digits, last3Digits, lotteryType } = req.body;
-    const safeType: LotteryType = lotteryType === 'baac' || lotteryType === 'gsb' ? lotteryType : 'gov';
-    if (!drawDate || !firstPrize || !last2Digits) {
-      return res.status(400).json({ success: false, error: 'กรุณากรอกข้อมูลงวด, รางวัลที่ 1 และเลขท้าย 2 ตัว' });
-    }
-
-    const newDraw = {
-      id: `${safeType}-${dateIso || 'draw'}-${Date.now()}`,
-      lotteryType: safeType,
-      drawDate,
-      dateIso: dateIso || new Date().toISOString().split('T')[0],
-      dayOfWeek: dayOfWeek || 'วันศุกร์',
-      firstPrize,
-      last2Digits,
-      first3Digits: Array.isArray(first3Digits) ? first3Digits : ['000', '000'],
-      last3Digits: Array.isArray(last3Digits) ? last3Digits : ['000', '000']
-    };
-
-    // Prepend to top of live database
-    liveDraws = [newDraw, ...liveDraws];
-    savePersistedStore();
-
-    const drawsForType = getHistoricalDrawsByType(safeType, liveDraws);
-    const updatedAccuracy = evaluateRealDatabaseAccuracy(drawsForType);
-
-    res.json({
-      success: true,
-      lotteryType: safeType,
-      data: newDraw,
-      accuracy: updatedAccuracy,
-      totalDraws: drawsForType.length,
-      message: `บันทึกผล${LOTTERY_META_MAP[safeType].shortName} งวด ${drawDate} สำเร็จ! คำนวณความแม่นยำใหม่ทันที: ${updatedAccuracy.overallRate}%`
-    });
-  } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// API: Delete a draw
-app.delete('/api/lottery/draws/:id', (req: Request, res: Response) => {
-  const { id } = req.params;
-  const rawType = String(req.query.lotteryType || 'gov');
-  const safeType: LotteryType = rawType === 'baac' || rawType === 'gsb' ? rawType : 'gov';
-  liveDraws = liveDraws.filter((d) => d.id !== id);
-  savePersistedStore();
-  const drawsForType = getHistoricalDrawsByType(safeType, liveDraws);
-  const updatedAccuracy = evaluateRealDatabaseAccuracy(drawsForType);
-  res.json({
-    success: true,
-    accuracy: updatedAccuracy,
-    totalDraws: drawsForType.length
-  });
-});
-
-// Compute current date/time in Thailand timezone (Asia/Bangkok, UTC+7)
-function getBangkokNow(): Date {
-  const now = new Date();
-  const bangkokMs = now.getTime() + (now.getTimezoneOffset() + 7 * 60) * 60 * 1000;
-  return new Date(bangkokMs);
+function getBangkokMinutesOfDay(referenceDate = new Date()): number {
+  const bangkokShifted = new Date(referenceDate.getTime() + 7 * 60 * 60 * 1000);
+  return bangkokShifted.getUTCHours() * 60 + bangkokShifted.getUTCMinutes();
 }
 
-// Run a single check & send pre-draw Telegram group alert if due (supports รัฐบาล, ธ.ก.ส., ออมสิน)
-async function runTelegramPreDrawTick(): Promise<{ ok: boolean; status: string; drawDate: string }> {
-  const now = getBangkokNow();
-  const nextGov = getNextDrawInfo(now);
+async function runTelegramPreDrawTick(): Promise<{
+  ok: boolean;
+  status: string;
+  drawDate: string;
+  scheduleMode?: string;
+  sentLotteries?: Lottery4DType[];
+}> {
+  await ensureStoreHydrated();
+  const now = new Date();
+  const nextLao = getNextDrawInfo4D('lao', now);
+  const scheduleMode = telegramConfig.scheduleMode || 'per_lottery_offset';
 
   if (!telegramConfig.isTelegramEnabled) {
-    return { ok: true, status: 'disabled', drawDate: nextGov.drawDateIso };
+    return { ok: true, status: 'disabled', drawDate: nextLao.drawDateIso, scheduleMode };
   }
 
-  const targetTypes: LotteryType[] =
+  const targetTypes: Lottery4DType[] =
     Array.isArray(telegramConfig.lotteryTypes) && telegramConfig.lotteryTypes.length > 0
       ? telegramConfig.lotteryTypes
-      : ['gov', 'baac', 'gsb'];
+      : LOTTERY_4D_LIST.map((m) => m.id);
 
   const dueDraws = targetTypes
-    .map((t) => ({ type: t, info: getNextDrawInfoByType(t, now) }))
-    .filter(({ info }) => info.daysUntilDraw - (telegramConfig.daysBeforeDraw || 1) <= 0);
+    .map((t) => ({ type: t, info: getNextDrawInfo4D(t, now), meta: LOTTERY_4D_META_MAP[t] }))
+    .filter(({ info }) => info.daysUntilDraw - (telegramConfig.daysBeforeDraw || 0) <= 0);
 
   if (dueDraws.length === 0) {
-    return { ok: true, status: 'not_due_yet', drawDate: nextGov.drawDateIso };
+    return { ok: true, status: 'not_due_yet', drawDate: nextLao.drawDateIso, scheduleMode };
   }
 
-  const batchKey = dueDraws.map((d) => `${d.type}:${d.info.drawDateIso}`).join('|');
-  if (telegramConfig.lastNotifiedDraw === batchKey || telegramConfig.lastNotifiedDraw === dueDraws[0].info.drawDateIso) {
-    return { ok: true, status: 'already_sent', drawDate: dueDraws[0].info.drawDateIso };
+  const notifiedMap: Partial<Record<Lottery4DType, string>> = {
+    ...(telegramConfig.lastNotifiedByLottery || {})
+  };
+  const currentMinutes = getBangkokMinutesOfDay(now);
+
+  let readyToSend = dueDraws.filter(({ type, info }) => notifiedMap[type] !== info.drawDateIso);
+  if (readyToSend.length === 0) {
+    return { ok: true, status: 'already_sent', drawDate: dueDraws[0].info.drawDateIso, scheduleMode };
   }
 
-  const [targetHour, targetMin] = (telegramConfig.notifyTime || '08:30').split(':').map(Number);
-  const currentMinutes = now.getHours() * 60 + now.getMinutes();
-  const scheduledMinutes = (targetHour || 8) * 60 + (targetMin || 30);
+  if (scheduleMode === 'per_lottery_offset') {
+    const leadMinutes = Math.min(240, Math.max(15, Number(telegramConfig.minutesBeforeDraw) || 90));
+    readyToSend = readyToSend.filter(({ info, meta }) => {
+      const alertMin = Math.max(0, meta.drawTimeMinutes - leadMinutes);
+      if (info.daysUntilDraw === 0) {
+        // On draw day, trigger between (drawTime - leadMinutes) and (drawTime + 20 mins grace)
+        return currentMinutes >= alertMin && currentMinutes <= meta.drawTimeMinutes + 20;
+      }
+      // Advance days (daysBeforeDraw > 0) trigger once we pass that lottery's daily alert time
+      return currentMinutes >= alertMin;
+    });
+  } else {
+    const [targetHour, targetMin] = (telegramConfig.notifyTime || '15:00').split(':').map(Number);
+    const scheduledMinutes = (Number.isFinite(targetHour) ? targetHour : 15) * 60 + (Number.isFinite(targetMin) ? targetMin : 0);
+    if (currentMinutes < scheduledMinutes) {
+      return { ok: true, status: 'waiting_notify_time', drawDate: readyToSend[0].info.drawDateIso, scheduleMode };
+    }
+  }
 
-  if (currentMinutes < scheduledMinutes) {
-    return { ok: true, status: 'waiting_notify_time', drawDate: dueDraws[0].info.drawDateIso };
+  if (readyToSend.length === 0) {
+    return { ok: true, status: 'waiting_per_lottery_window', drawDate: dueDraws[0].info.drawDateIso, scheduleMode };
   }
 
   const envSecrets = getTelegramEnvSecrets();
@@ -1006,70 +1312,98 @@ async function runTelegramPreDrawTick(): Promise<{ ok: boolean; status: string; 
   const effectiveChatId = (telegramConfig.chatId || '').trim() || envSecrets.chatId;
 
   if (!effectiveToken || !effectiveChatId) {
-    return { ok: true, status: 'missing_credentials', drawDate: dueDraws[0].info.drawDateIso };
+    return { ok: true, status: 'missing_credentials', drawDate: readyToSend[0].info.drawDateIso, scheduleMode };
   }
 
-  const sections = dueDraws.map(({ type, info }) => {
-    const pred = generateDynamicLotteryPrediction(info.drawDateStr, info.dayOfWeek, info.drawDateIso, undefined, type, liveDraws);
-    const win4 = pred.win4Strategy;
-    const coreWinDigits = win4 ? win4.digits.join(' - ') : pred.luckyDayPlanetaryNumbers.slice(0, 4).join(' - ');
-    const win2Sets = win4 ? win4.twoDigitNoDouble.join(' · ') : pred.twoDigitsTop.slice(0, 8).join(' · ');
-    const win3Toad = win4 ? win4.threeDigitToad.join(' · ') : pred.threeDigitsToad.slice(0, 4).join(' · ');
-    const megaShot = pred.sniperThreeStraight?.megaSingleShot || pred.threeDigitsStraight[0];
-    return `📌 [${LOTTERY_META_MAP[type].name}]\n🗓️ งวด ${info.drawDateStr} (${info.dayOfWeek})\n🔥 แกนวิน 4 ตัวลงทุน: [ ${coreWinDigits} ]\n💎 วิน 2 ตัว 12 หาง: ${win2Sets}\n👑 วิน 3 ตัวโต๊ด 4 ชุด: ${win3Toad}\n🎯 เม็ดเดียว 3 ตัวตรง: ${megaShot}`;
+  const sections = readyToSend.map(({ type, info, meta }) => {
+    const draws = drawsStore[type] || getDefault4DDraws(type);
+    const pred = build4DPredictionSummary(draws, type, info);
+    const cb = pred.circuitBreaker;
+    const isWin4Mode = pred.strategyMode === 'win4_3d';
+    const sniperList = isWin4Mode
+      ? pred.win4Breakdown.threeDigitStraightSets.slice(0, cb.recommendedSetsCount || 1)
+      : pred.sniperSets.slice(0, cb.recommendedSetsCount || 1).map((s) => s.number4D);
+
+    const statusLine =
+      cb.status === 'red_pause'
+        ? '🔴 สถานะ: หยุดพักชั่วคราว (Cold Drift เกินค่าเฉลี่ย)'
+        : cb.status === 'yellow_nearmiss'
+          ? `🟡 สถานะ: เกาะกลุ่ม Near-Miss · ลดงบเหลือ 1 ชุดเม็ดเดียว (120 บ.) + ประคอง 2 ตัว: ${pred.backupTwoBack.slice(0, 3).join(', ')}`
+          : `🟢 สถานะ: ปกติ · เต็มพอร์ต 4 ชุด (480 บ.)`;
+
+    if (isWin4Mode) {
+      const all24 = pred.win4Breakdown.threeDigitStraight24Sets || [];
+      const hedge = pred.win4Breakdown.threeDigitDoubleHedgeSets || [];
+      return `📌 [${meta.name} · ออกเวลา ${meta.drawTimeLabel}]\n🗓️ งวด ${info.drawDateStr} (${info.dayOfWeek})\n🔥 แกนวิน 4 ตัว: [ ${pred.win4Breakdown.coreDigits4.join(' - ')} ]\n👑 4 ชุดเน้น (เม็ดเดียว ${pred.win4Breakdown.megaThreeStraight}): ${pred.win4Breakdown.threeDigitStraightSets.join(' · ')} (ชนเฉลี่ย ${pred.deepAnalysis?.averageAgreementOutOf22 || 0}/22 แหล่ง)\n🎯 แตก 3 ตัว 24 ชุด: ${all24.join(' · ')}\n🛡️ 3 ตัวโต๊ด 4 ชุด: ${pred.win4Breakdown.threeDigitToadSets.join(' · ')}${hedge.length > 0 ? `\n⚡ กันเบิ้ล/หาม 4 ชุด: ${hedge.join(' · ')}` : ''}\n${statusLine}`;
+    }
+
+    return `📌 [${meta.name} · ออกเวลา ${meta.drawTimeLabel}]\n🗓️ งวด ${info.drawDateStr} (${info.dayOfWeek})\n👑 Super Number 4 ตัว: [ ${pred.superNumber4D} ] (ชนเฉลี่ย ${pred.deepAnalysis?.averageAgreementOutOf22 || 0}/${pred.totalSourcesAnalyzed || 22} แหล่ง)\n🎯 Diverse Sniper Sets: ${sniperList.join(' · ')}\n🛡️ 3 โต๊ด / 2 ตัวท้าย: ${pred.backupThreeToad.slice(0, 3).join(', ')} / ${pred.backupTwoBack.slice(0, 4).join(', ')}\n${statusLine}`;
   });
 
-  const autoMsg = `🔔 แจ้งเตือนเลขเด็ดสมาชิกกลุ่ม Telegram (ก่อนหวยออก ${telegramConfig.daysBeforeDraw} วัน)\n\n${sections.join('\n\n────────────────\n\n')}`;
+  const leadMinutes = Math.min(240, Math.max(15, Number(telegramConfig.minutesBeforeDraw) || 90));
+  const modeHeader =
+    scheduleMode === 'per_lottery_offset'
+      ? `⏰ แจ้งเตือนก่อนหวยออก ${leadMinutes} นาที`
+      : `⏰ แจ้งเตือนรวมรอบเวลา ${telegramConfig.notifyTime} น.`;
+
+  const autoMsg = `🔔 แจ้งเตือนเลขเด็ด AI (${modeHeader} · ${readyToSend.length} สลาก)\n\n${sections.join('\n\n────────────────\n\n')}`;
 
   await dispatchTelegramMessage({
     botToken: effectiveToken,
     chatId: effectiveChatId,
     messageThreadId: telegramConfig.messageThreadId,
     message: autoMsg,
-    drawDate: dueDraws.map((d) => `${LOTTERY_META_MAP[d.type].shortName} ${d.info.drawDateStr}`).join(' / '),
+    drawDate: readyToSend.map((d) => `${d.meta.shortName} ${d.info.drawDateStr}`).join(' / '),
     pinMessage: telegramConfig.pinMessage,
     disableNotification: telegramConfig.disableNotification,
     isSimulated: false
   });
 
-  telegramConfig.lastNotifiedDraw = batchKey;
-  savePersistedStore();
-  console.log(`[Telegram Scheduler] Sent pre-draw group alert for ${batchKey}`);
-  return { ok: true, status: 'sent', drawDate: dueDraws[0].info.drawDateIso };
+  const sentLotteries: Lottery4DType[] = [];
+  for (const d of readyToSend) {
+    notifiedMap[d.type] = d.info.drawDateIso;
+    sentLotteries.push(d.type);
+  }
+  telegramConfig.lastNotifiedByLottery = notifiedMap;
+  telegramConfig.lastNotifiedDraw = readyToSend.map((d) => `${d.type}:${d.info.drawDateIso}`).join('|');
+  await savePersistedStore();
+
+  return {
+    ok: true,
+    status: 'sent',
+    drawDate: readyToSend[0].info.drawDateIso,
+    scheduleMode,
+    sentLotteries
+  };
 }
 
-// Lightweight HTTP cron endpoints for cron-job.org (tiny JSON response < 100 bytes)
 const handleTelegramCronTick = async (_req: Request, res: Response) => {
   try {
     const result = await runTelegramPreDrawTick();
     res.json(result);
   } catch (err: any) {
-    console.warn('[Telegram Cron] Error:', err?.message);
     res.status(500).json({ ok: false, error: err?.message || 'cron_error' });
   }
 };
 
-app.all('/api/telegram/cron-tick', handleTelegramCronTick);
-app.all('/api/telegram/cron-trigger', handleTelegramCronTick);
-app.all('/api/telegram/cron', handleTelegramCronTick);
+app.all('/api/telegram/cron-tick', requireCronSecret, handleTelegramCronTick);
+app.all('/api/telegram/cron-trigger', requireCronSecret, handleTelegramCronTick);
+app.all('/api/telegram/cron', requireCronSecret, handleTelegramCronTick);
 
-// Automatic Pre-Draw Telegram Group Alert Scheduler (runs every 60s)
 function startTelegramPreDrawScheduler() {
   setInterval(async () => {
     try {
       await runTelegramPreDrawTick();
     } catch (err: any) {
-      console.warn('[Telegram Scheduler] Error dispatching automatic alert:', err?.message);
+      console.warn('[Telegram Scheduler] Error:', err?.message);
     }
   }, 60 * 1000);
 }
 
-// Ensure unknown /api/* routes return tiny JSON 404 instead of index.html
 app.all('/api/*', (req: Request, res: Response) => {
   res.status(404).json({ ok: false, error: `Unknown API route: ${req.path}` });
 });
 
-// Setup Vite in Dev or Static files in Prod (skipped on Vercel serverless runtime)
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const vitePkg = 'vite';

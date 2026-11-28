@@ -1,156 +1,78 @@
 import React from 'react';
 import { NextDrawInfo } from '../types/lottery';
-import { Sparkles, Calendar, Clock, Share2, BarChart2, Sliders, Send } from 'lucide-react';
 
-export type AppTab = 'dashboard' | 'analyzer' | 'telegram' | 'autopost' | 'statistics' | 'backtest';
+export type AppTab = 'dashboard' | 'ingest' | 'statistics' | 'backtest' | 'telegram';
 
 interface HeaderProps {
   nextDraw: NextDrawInfo;
   activeTab: AppTab;
   setActiveTab: (tab: AppTab) => void;
-  isAutoPostEnabled: boolean;
-  isTelegramEnabled: boolean;
-  lotteryShortName?: string;
+  onQuickIngest: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   nextDraw,
   activeTab,
   setActiveTab,
-  isAutoPostEnabled,
-  isTelegramEnabled,
-  lotteryShortName = 'รัฐบาล'
+  onQuickIngest
 }) => {
+  const navItems: { id: AppTab; label: string }[] = [
+    { id: 'dashboard', label: 'แดชบอร์ด 4D' },
+    { id: 'ingest', label: 'นำเข้าข้อมูล AI' },
+    { id: 'statistics', label: 'สถิติ & กรองเลข' },
+    { id: 'backtest', label: 'Backtest 200 งวด' },
+    { id: 'telegram', label: 'แจ้งเตือน Telegram' }
+  ];
+
   return (
-    <header className="border-b border-slate-800 bg-slate-900/85 backdrop-blur-md sticky top-0 z-40">
-      {/* Top Schedule Strip */}
-      <div className="bg-slate-950/80 border-b border-slate-800/80 px-4 py-2">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs tabular-nums">
-          <div className="flex flex-wrap items-center gap-2 text-slate-300">
-            <span>
-              งวดถัดไป ({lotteryShortName}): <strong className="text-amber-400">{nextDraw.drawDateStr}</strong> ({nextDraw.dayOfWeek})
-            </span>
-            <span aria-hidden="true" className="text-slate-600">·</span>
-            <span className="text-amber-300 font-semibold">อีก {nextDraw.daysUntilDraw} วันหวยออก</span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-4 text-slate-300">
-            <div className="flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5 text-blue-400" />
-              <span>โพสต์ FB (ก่อน 5 วัน):</span>
-              <strong className="text-blue-300">{nextDraw.autoPostDateStr}</strong>
-              <span className={isAutoPostEnabled ? 'text-emerald-400' : 'text-slate-500'}>
-                ({isAutoPostEnabled ? 'เปิด' : 'ปิด'})
-              </span>
-            </div>
-
-            <span aria-hidden="true" className="text-slate-700 hidden sm:inline">|</span>
-
-            <div className="flex items-center gap-1.5">
-              <Send className="w-3.5 h-3.5 text-sky-400" />
-              <span>กลุ่ม Telegram:</span>
-              <span className={isTelegramEnabled ? 'text-sky-400' : 'text-slate-500'}>
-                ({isTelegramEnabled ? 'เปิด' : 'ปิด'})
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Header Nav */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-col lg:flex-row items-center justify-between gap-4">
-        {/* Brand Wordmark */}
+    <header className="border-b border-slate-800/90 bg-slate-950/90 backdrop-blur-md sticky top-0 z-40">
+      <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-6">
+        {/* Zone 1: Single-line Brand Wordmark */}
         <button
+          type="button"
           onClick={() => setActiveTab('dashboard')}
-          className="flex items-center gap-3 text-left shrink-0"
+          className="text-lg font-bold tracking-tight text-white hover:text-amber-400 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-500 via-yellow-400 to-amber-600 flex items-center justify-center shadow-md border border-amber-300/40 shrink-0">
-            <Sparkles className="w-5 h-5 text-slate-950 fill-slate-950" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold bg-gradient-to-r from-amber-200 via-amber-400 to-yellow-500 bg-clip-text text-transparent whitespace-nowrap">
-              AI หวยแม่นยำ
-            </h1>
-            <p className="text-[11px] text-slate-400 whitespace-nowrap">
-              วิเคราะห์ 22 แหล่ง · ฟันธง 3 ตัวตรง & ส่งกลุ่ม Telegram / FB
-            </p>
-          </div>
+          AI หวยชุด 4 ประเทศ
         </button>
 
-        {/* Navigation Tabs */}
-        <nav className="flex items-center gap-1 bg-slate-950/70 p-1 rounded-xl border border-slate-800 overflow-x-auto max-w-full">
-          <button
-            onClick={() => setActiveTab('dashboard')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'dashboard'
-                ? 'bg-amber-500 text-slate-950 font-semibold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>สรุปเลขเด่น AI</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('analyzer')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'analyzer'
-                ? 'bg-amber-500 text-slate-950 font-semibold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Sliders className="w-4 h-4" />
-            <span>วิเคราะห์ 22 แหล่ง</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('telegram')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'telegram'
-                ? 'bg-sky-500 text-slate-950 font-semibold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Send className={`w-4 h-4 ${activeTab === 'telegram' ? 'text-slate-950' : 'text-sky-400'}`} />
-            <span>กลุ่ม Telegram</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('autopost')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'autopost'
-                ? 'bg-blue-600 text-white font-semibold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Share2 className={`w-4 h-4 ${activeTab === 'autopost' ? 'text-white' : 'text-blue-400'}`} />
-            <span>โพสต์ Facebook</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('statistics')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'statistics'
-                ? 'bg-amber-500 text-slate-950 font-semibold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <BarChart2 className="w-4 h-4" />
-            <span>สถิติ 10 ปี</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('backtest')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors whitespace-nowrap shrink-0 ${
-              activeTab === 'backtest'
-                ? 'bg-amber-500 text-slate-950 font-semibold'
-                : 'text-slate-300 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Calendar className="w-4 h-4" />
-            <span>ตรวจผลย้อนหลัง</span>
-          </button>
+        {/* Zone 2: 5 Clean Single-Line Navigation Links */}
+        <nav
+          aria-label="เมนูหลัก"
+          className="flex items-center gap-5 lg:gap-7 overflow-x-auto no-scrollbar py-1"
+        >
+          {navItems.map((item) => {
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveTab(item.id)}
+                className={`text-xs sm:text-sm font-medium pb-1 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  isActive
+                    ? 'border-amber-400 text-amber-400 font-semibold'
+                    : 'border-transparent text-slate-300 hover:text-white hover:border-slate-700'
+                }`}
+              >
+                {item.label}
+              </button>
+            );
+          })}
         </nav>
+
+        {/* Zone 3: 1 Primary CTA Action */}
+        <div className="hidden sm:flex items-center gap-4 shrink-0">
+          <span className="hidden xl:inline text-xs text-slate-400 tabular-nums whitespace-nowrap">
+            งวดถัดไป {nextDraw.drawDateStr}
+          </span>
+          <button
+            type="button"
+            onClick={onQuickIngest}
+            className="px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs sm:text-sm font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            ดึงผล 4D ล่าสุด
+          </button>
+        </div>
       </div>
     </header>
   );

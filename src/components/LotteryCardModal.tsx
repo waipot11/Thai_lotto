@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AIPredictionResult } from '../types/lottery';
+import { AIPrediction4DResult } from '../types/lottery';
 import { renderLotteryCardToCanvas } from '../utils/canvasCard';
-import { Download, X, Copy, Check, Sparkles, Image as ImageIcon } from 'lucide-react';
+import { Download, X, Image as ImageIcon } from 'lucide-react';
 
 interface LotteryCardModalProps {
   isOpen: boolean;
   onClose: () => void;
-  prediction: AIPredictionResult;
+  prediction: AIPrediction4DResult;
 }
 
 export const LotteryCardModal: React.FC<LotteryCardModalProps> = ({
@@ -15,7 +15,7 @@ export const LotteryCardModal: React.FC<LotteryCardModalProps> = ({
   prediction
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [watermark, setWatermark] = useState('AI Lottery Deep Analysis • แม่นยำ 94%');
+  const [watermark, setWatermark] = useState('AI หวยชุด 4 ประเทศ • Quantitative 4D Suite');
   const [downloadSuccess, setDownloadSuccess] = useState(false);
 
   useEffect(() => {
@@ -29,7 +29,7 @@ export const LotteryCardModal: React.FC<LotteryCardModalProps> = ({
   const handleDownload = () => {
     if (!canvasRef.current) return;
     const link = document.createElement('a');
-    link.download = `AI-หวยแม่นยำ-${prediction.drawDate.replace(/\s+/g, '-')}.png`;
+    link.download = `4D-${prediction.lotteryType}-${prediction.drawDateIso}.png`;
     link.href = canvasRef.current.toDataURL('image/png');
     link.click();
 
@@ -46,18 +46,18 @@ export const LotteryCardModal: React.FC<LotteryCardModalProps> = ({
               <ImageIcon className="w-4 h-4" />
             </div>
             <h3 className="text-lg font-bold text-white">
-              การ์ดรูปภาพสรุปตัวเลข AI (Lottery Fortune Card)
+              การ์ดสรุปตัวเลข 4D ({prediction.lotteryName})
             </h3>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-colors"
+            className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition-colors cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Canvas Display */}
         <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800 flex justify-center">
           <canvas
             ref={canvasRef}
@@ -65,10 +65,9 @@ export const LotteryCardModal: React.FC<LotteryCardModalProps> = ({
           />
         </div>
 
-        {/* Watermark customization */}
         <div>
           <label className="block text-xs font-semibold text-slate-300 mb-1">
-            ข้อความลายน้ำด้านล่างรูป (Watermark / Footer)
+            ข้อความลายน้ำด้านล่างรูป (Watermark)
           </label>
           <input
             type="text"
@@ -78,17 +77,18 @@ export const LotteryCardModal: React.FC<LotteryCardModalProps> = ({
           />
         </div>
 
-        {/* Modal Actions */}
         <div className="flex items-center justify-end gap-3 pt-2">
           <button
+            type="button"
             onClick={onClose}
-            className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700"
+            className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 cursor-pointer"
           >
             ปิด
           </button>
           <button
+            type="button"
             onClick={handleDownload}
-            className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-bold shadow-lg shadow-amber-500/20 flex items-center gap-2 transition-all"
+            className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-bold shadow-lg shadow-amber-500/20 flex items-center gap-2 transition-all cursor-pointer"
           >
             <Download className="w-4 h-4" />
             <span>{downloadSuccess ? 'ดาวน์โหลดเสร็จสิ้น!' : 'ดาวน์โหลดรูปภาพ (1080x1080 PNG)'}</span>

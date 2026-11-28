@@ -1,423 +1,582 @@
-import React, { useState, useMemo } from 'react';
-import { HISTORICAL_DRAWS, evaluateRealDatabaseAccuracy, RealBacktestResult } from '../data/lotteryHistory';
+import React, { useMemo, useState } from 'react';
 import {
-  CheckCircle2,
-  XCircle,
+  LOTTERY_4D_META_MAP,
+  evaluateMultiRegimeBacktest
+} from '../data/lottery4DDatabase';
+import {
+  Backtest4DAuditRow,
+  Lottery4DType,
+  LotteryDraw4D
+} from '../types/lottery';
+import {
+  Activity,
   TrendingUp,
-  Award,
-  Calendar,
-  Sparkles,
+  ShieldAlert,
   ShieldCheck,
+  AlertTriangle,
   Search,
-  Filter,
-  Check,
-  Info,
-  ChevronRight,
-  Database,
   BarChart3,
-  Plus
+  CheckCircle2,
+  PauseCircle
 } from 'lucide-react';
 
-import { LotteryDraw, LotteryType } from '../types/lottery';
-import { LOTTERY_META_MAP } from '../data/specialLotteries';
-
 interface BacktestingViewProps {
-  onOpenLiveDrawModal?: () => void;
-  externalAccuracyReport?: ReturnType<typeof evaluateRealDatabaseAccuracy>;
-  draws?: LotteryDraw[];
-  lotteryType?: LotteryType;
+  draws: LotteryDraw4D[];
+  lotteryType: Lottery4DType;
+  onNavigateToIngest?: () => void;
 }
 
+type AuditFilter = 'all' | 'win' | 'nearmiss' | 'cold' | 'defensive';
+
 export const BacktestingView: React.FC<BacktestingViewProps> = ({
-  onOpenLiveDrawModal,
-  externalAccuracyReport,
-  draws = HISTORICAL_DRAWS,
-  lotteryType = 'gov'
+  draws,
+  lotteryType,
+  onNavigateToIngest
 }) => {
-  const [filterMode, setFilterMode] = useState<'all' | 'hit' | 'dual' | 'three' | 'miss'>('all');
-  const [yearFilter, setYearFilter] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const meta = LOTTERY_4D_META_MAP[lotteryType];
+  const [windowSize, setWindowSize] = useState<number>(200);
+  const [filterMode, setFilterMode] = useState<AuditFilter>('all');
+  const [searchTerm, setSearchTerm] = useState('');
 
-  const lotteryMeta = LOTTERY_META_MAP[lotteryType] || LOTTERY_META_MAP.gov;
+  const report = useMemo(
+    () => evaluateMultiRegimeBacktest(draws, lotteryType, windowSize),
+    [draws, lotteryType, windowSize]
+  );
 
-  // Dynamically compute real database accuracy across all actual historical draws
-  const accuracyReport = useMemo(() => {
-    return externalAccuracyReport || evaluateRealDatabaseAccuracy(draws);
-  }, [externalAccuracyReport, draws]);
+  const cb = report.circuitBreaker;
 
-  // Filtered list
-  const filteredResults = useMemo(() => {
-    return accuracyReport.results.filter((item) => {
-      // Filter by hit/miss/dual/three
-      if (filterMode === 'hit' && !item.isOverallHit) return false;
-      if (filterMode === 'dual' && !item.isDualHit) return false;
-      if (filterMode === 'three' && !item.isThreeDigitsHit) return false;
-      if (filterMode === 'miss' && item.isOverallHit) return false;
+  const filteredRows = useMemo<Backtest4DAuditRow[]>(() => {
+    return report.auditRows.filter((row) => {
+      if (filterMode === 'win' && !row.isWin) return false;
+      if (filterMode === 'nearmiss' && !row.isNearMiss) return false;
+      if (filterMode === 'cold' && (row.isWin || row.isNearMiss)) return false;
+      if (filterMode === 'defensive' && row.circuitBreakerStateAtDraw === 'normal') return false;
 
-      // Filter by Year
-      if (yearFilter !== 'all') {
-        if (!item.drawDate.includes(yearFilter)) return false;
+      if (searchTerm.trim()) {
+        const q = searchTerm.trim().toLowerCase();
+        const matches =
+          row.actual4D.includes(q) ||
+          row.drawDate.toLowerCase().includes(q) ||
+          row.sniperSets.some((s) => s.includes(q));
+        if (!matches) return false;
       }
-
-      // Search Query
-      if (searchQuery.trim()) {
-        const q = searchQuery.trim();
-        const matchesDate = item.drawDate.includes(q);
-        const matchesFirstPrize = item.actualFirstPrize.includes(q);
-        const matchesLast2 = item.actualLast2.includes(q);
-        if (!matchesDate && !matchesFirstPrize && !matchesLast2) return false;
-      }
-
       return true;
     });
-  }, [accuracyReport, filterMode, yearFilter, searchQuery]);
+  }, [report.auditRows, filterMode, searchTerm]);
+
+  // Build SVG equity curve geometry
+  const chartSvg = useMemo(() => {
+    const pts = report.equityCurve;
+    if (pts.length === 0) return null;
+
+    const width = 920;
+    const height = 220;
+    const padLeft = 56;
+    const padRight = 20;
+    const padTop = 20;
+    const padBottom = 30;
+    const innerW = width - padLeft - padRight;
+    const innerH = height - padTop - padBottom;
+
+    const vals = [0, ...pts.map((p) => p.cumulativeProfit)];
+    const minVal = Math.min(...vals);
+    const maxVal = Math.max(...vals);
+    const span = Math.max(1000, maxVal - minVal);
+
+    const toX = (idx: number) =>
+      padLeft + (pts.length <= 1 ? innerW / 2 : (idx / (pts.length - 1)) * innerW);
+    const toY = (val: number) => padTop + ((maxVal - val) / span) * innerH;
+
+    const polylinePoints = pts.map((p, i) => `${toX(i).toFixed(1)},${toY(p.cumulativeProfit).toFixed(1)}`).join(' ');
+    const areaPoints = `${toX(0).toFixed(1)},${toY(0).toFixed(1)} ${polylinePoints} ${toX(pts.length - 1).toFixed(1)},${toY(0).toFixed(1)}`;
+    const zeroY = toY(0);
+
+    return {
+      width,
+      height,
+      padLeft,
+      padRight,
+      zeroY,
+      minVal,
+      maxVal,
+      polylinePoints,
+      areaPoints,
+      lastProfit: pts[pts.length - 1].cumulativeProfit
+    };
+  }, [report.equityCurve]);
+
+  const cbColorClasses =
+    cb.status === 'red_pause'
+      ? {
+          wrap: 'bg-rose-950/30 border-rose-500/40',
+          badge: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+          title: 'text-rose-200',
+          icon: <PauseCircle className="w-5 h-5 text-rose-400 shrink-0" />
+        }
+      : cb.status === 'yellow_nearmiss'
+        ? {
+            wrap: 'bg-amber-950/30 border-amber-500/40',
+            badge: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+            title: 'text-amber-200',
+            icon: <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+          }
+        : {
+            wrap: 'bg-emerald-950/25 border-emerald-500/35',
+            badge: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+            title: 'text-emerald-200',
+            icon: <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+          };
 
   return (
     <div className="space-y-6">
-      {/* Real Database Proof Header */}
-      <div className="rounded-3xl bg-gradient-to-br from-slate-900 via-slate-900/90 to-emerald-950/60 border border-emerald-500/40 p-6 sm:p-8 shadow-2xl relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+      {/* Header Control Bar */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-5">
+        <div>
+          <div className="text-xs font-medium text-amber-400 mb-1">
+            Multi-Regime Causal Walk-Forward Backtest · {meta.name}
+          </div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
+            ทดสอบย้อนหลัง {report.totalEvaluated} งวดล่าสุด & ระบบประคองพอร์ตอัจฉริยะ
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-400 mt-1">
+            จำลองคำนวณงวดต่อวดแบบ Zero Look-Ahead (ใช้สถิติก่อนวันออกจริงเท่านั้น) พร้อมตรวจจับ Near-Miss และปรับขนาดเงินทุนอัตโนมัติ
+          </p>
+        </div>
 
-        <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6 border-b border-slate-800 pb-6">
-          <div>
-            <div className="text-xs text-emerald-400 font-semibold mb-2">
-              การพิสูจน์ความแม่นยำจากฐานข้อมูล{lotteryMeta.name} ({lotteryMeta.scheduleLabel})
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {[50, 100, 200].map((w) => (
+            <button
+              key={w}
+              type="button"
+              onClick={() => setWindowSize(w)}
+              className={`px-3.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer tabular-nums ${
+                windowSize === w
+                  ? 'bg-amber-500 text-slate-950'
+                  : 'bg-slate-900 border border-slate-800 text-slate-300 hover:text-white'
+              }`}
+            >
+              {w} งวดล่าสุด
+            </button>
+          ))}
+          {onNavigateToIngest && (
+            <button
+              type="button"
+              onClick={onNavigateToIngest}
+              className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors cursor-pointer"
+            >
+              + นำเข้าผลย้อนหลังเพิ่ม
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Near-Miss & Drift Circuit Breaker Banner */}
+      <div className={`rounded-2xl border p-5 sm:p-6 space-y-4 ${cbColorClasses.wrap}`}>
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex items-start gap-3.5">
+            <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800">
+              {cbColorClasses.icon}
             </div>
-            <h2 className="text-2xl sm:text-3xl font-extrabold text-white">
-              ดัชนีความแม่นยำ ({lotteryMeta.shortName}): <span className="text-emerald-400">{accuracyReport.overallRate}%</span>
-            </h2>
-            <p className="text-slate-300 text-sm mt-1">
-              คำนวณสดจากฐานข้อมูลผลรางวัล {lotteryMeta.name} จำนวน {accuracyReport.total} งวด · สูตรแยกบน-ล่าง และเจาะหลักร้อย 3 ตัวตรง
-            </p>
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-md border ${cbColorClasses.badge}`}>
+                  {cb.statusBadgeText}
+                </span>
+                <span className="text-xs text-slate-400 tabular-nums">
+                  หลุดต่อเนื่องปัจจุบัน {cb.consecutiveMisses} งวด · เฉียดล่าสุด {cb.recentNearMissCount}/3 งวด · ค่าเฉลี่ยหลุดขาดธรรมชาติ {cb.naturalColdStreakAvg} งวด
+                </span>
+              </div>
+              <h2 className={`text-lg font-bold ${cbColorClasses.title}`}>
+                {cb.statusTitle}
+              </h2>
+              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed">
+                {cb.reason}
+              </p>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="bg-slate-950/80 border border-emerald-500/40 rounded-2xl px-5 py-4 text-center">
-              <span className="text-xs text-slate-400 block">เข้าอย่างน้อย 1 ตัว (วิ่ง/คู่/3 ตัว)</span>
-              <div className="text-3xl font-black text-emerald-400 mt-0.5">
-                {accuracyReport.overallRate}%
-              </div>
-              <span className="text-[11px] text-amber-300 font-medium flex items-center justify-center gap-1 mt-1">
-                เข้า 3 ตัวตรง/โต๊ดจริง {accuracyReport.threeDigitRate}%
+          <div className="bg-slate-950/75 border border-slate-800 rounded-xl px-4 py-3 shrink-0 min-w-[260px]">
+            <div className="text-xs text-slate-400">งบลงทุนแนะนำสำหรับงวดถัดไป</div>
+            <div className="text-xl font-bold text-white font-mono tabular-nums mt-0.5">
+              {cb.recommendedBudgetBaht.toLocaleString()} บาท{' '}
+              <span className="text-xs font-sans font-normal text-slate-400">
+                {meta.strategyMode === 'win4_3d'
+                  ? '(24 ชุด×10บ. + 4 เน้น×50บ. + 4 กันเบิ้ล×10บ.)'
+                  : `(${cb.recommendedSetsCount} ชุด × ${cb.recommendedUnitCostBaht} บ.)`}
               </span>
             </div>
-
-            {onOpenLiveDrawModal && (
-              <button
-                onClick={onOpenLiveDrawModal}
-                className="px-4 py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-emerald-500/20 flex items-center gap-2 transition-all"
-              >
-                <Plus className="w-4 h-4" />
-                <span>บันทึกผลสลากงวดใหม่</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* 4 Real KPI Cards with Dual-Hit & 3-Digits Focus */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
-          <div className="bg-slate-950/70 border border-amber-500/30 rounded-2xl p-4">
-            <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" /> อัตราเข้าเลขเด่น (วิ่ง-รูด)
-            </div>
-            <div className="text-2xl font-black text-amber-400">
-              {accuracyReport.runnerRate}%
-            </div>
-            <div className="text-xs text-slate-400 mt-1">
-              เข้าเป้า {accuracyReport.runnerHits} จาก {accuracyReport.total} งวด
-            </div>
-          </div>
-
-          <div className="bg-slate-950/70 border border-emerald-500/30 rounded-2xl p-4">
-            <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
-              <Award className="w-3.5 h-3.5 text-emerald-400" /> 🔥 โดนทั้งบนและล่าง!
-            </div>
-            <div className="text-2xl font-black text-emerald-400">
-              {accuracyReport.dualRate ?? 0}%
-            </div>
-            <div className="text-xs text-slate-400 mt-1">
-              เข้าทั้ง 2 ตัวบน & 2 ตัวล่าง {accuracyReport.dualHits} งวด
-            </div>
-          </div>
-
-          <div className="bg-slate-950/70 border border-purple-500/30 rounded-2xl p-4">
-            <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
-              <Sparkles className="w-3.5 h-3.5 text-purple-400" /> 👑 เข้า 3 ตัว (ตรง/โต๊ด)
-            </div>
-            <div className="text-2xl font-black text-purple-400">
-              {accuracyReport.threeDigitRate ?? 0}%
-            </div>
-            <div className="text-xs text-slate-400 mt-1">
-              เข้า 3 ตัว {accuracyReport.threeDigitHits} งวด (สูตรล็อคหลักร้อย)
-            </div>
-          </div>
-
-          <div className="bg-slate-950/70 border border-blue-500/30 rounded-2xl p-4">
-            <div className="text-xs text-slate-400 flex items-center gap-1.5 mb-1">
-              <BarChart3 className="w-3.5 h-3.5 text-blue-400" /> เจาะหลักร้อยแม่นยำ
-            </div>
-            <div className="text-2xl font-black text-blue-400">
-              {accuracyReport.hundredRate ?? 0}%
-            </div>
-            <div className="text-xs text-slate-400 mt-1">
-              เข้าหลักร้อย {accuracyReport.hundredHits} จาก {accuracyReport.total} งวด
-            </div>
-          </div>
-        </div>
-
-        {/* Win-4 Investment Strategy Backtest Strip */}
-        <div className="mt-4 rounded-2xl bg-slate-950/80 border border-emerald-500/35 p-4 sm:p-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3 mb-3">
-            <div className="text-xs sm:text-sm font-bold text-emerald-300 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-emerald-400" />
-              <span>สถิติย้อนหลังระบบลงทุน "วิน 4 ตัว" ({lotteryMeta.shortName} · {accuracyReport.total} งวด)</span>
-            </div>
-            <span className="text-[11px] text-slate-400">คำนวณแกนวิน 4 ตัวจากงวดก่อนหน้าโดยไม่ดูเฉลย</span>
-          </div>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-            <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
-              <div className="text-slate-400">วิน 2 ตัว (12 หาง · เข้าบนหรือล่าง)</div>
-              <div className="text-xl font-black text-emerald-400 mt-0.5 tabular-nums">
-                {accuracyReport.win4Either2Rate ?? 0}%
-              </div>
-              <div className="text-[11px] text-slate-500">
-                เข้า {accuracyReport.win4Either2Hits ?? 0}/{accuracyReport.total} งวด (รวมเบิ้ล 16 หาง: {accuracyReport.win4WithDoubleEitherRate ?? 0}%)
-              </div>
-            </div>
-            <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
-              <div className="text-slate-400">วิน 2 ตัวบน (12 หาง)</div>
-              <div className="text-xl font-black text-amber-300 mt-0.5 tabular-nums">
-                {accuracyReport.win4Top2Rate ?? 0}%
-              </div>
-              <div className="text-[11px] text-slate-500">
-                เข้า 2 ตัวบน {accuracyReport.win4Top2Hits ?? 0} งวด
-              </div>
-            </div>
-            <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
-              <div className="text-slate-400">วิน 2 ตัวล่าง (12 หาง)</div>
-              <div className="text-xl font-black text-sky-300 mt-0.5 tabular-nums">
-                {accuracyReport.win4Bottom2Rate ?? 0}%
-              </div>
-              <div className="text-[11px] text-slate-500">
-                เข้า 2 ตัวล่าง {accuracyReport.win4Bottom2Hits ?? 0} งวด
-              </div>
-            </div>
-            <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3">
-              <div className="text-slate-400">วิน 3 ตัวโต๊ด (4 ชุดหลัก)</div>
-              <div className="text-xl font-black text-purple-300 mt-0.5 tabular-nums">
-                {accuracyReport.win4ToadRate ?? 0}%
-              </div>
-              <div className="text-[11px] text-slate-500">
-                เข้า 3 ตัวโต๊ด {accuracyReport.win4ToadHits ?? 0} จาก {accuracyReport.total} งวด
-              </div>
-            </div>
+            <div className="text-xs text-amber-300 mt-1">{cb.defensiveRecommendation}</div>
           </div>
         </div>
       </div>
 
-      {/* Filter and Audit Table */}
-      <div className="rounded-2xl bg-slate-900/60 border border-slate-800 p-6 space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-4">
-          <div>
-            <h3 className="text-base font-bold text-white flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-amber-400" />
-              ตารางตรวจสอบผลจริงรายงวด (Audit Inspector)
-            </h3>
-            <p className="text-xs text-slate-400 mt-0.5">
-              แสดง {filteredResults.length} จาก {accuracyReport.total} งวดตามตัวกรอง
+      {/* 5 Key Metrics Strip */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 tabular-nums">
+        <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-4">
+          <div className="text-xs text-slate-400 flex items-center justify-between">
+            <span>กำไร/ขาดทุนสุทธิ ({report.totalEvaluated} งวด)</span>
+            <TrendingUp className="w-4 h-4 text-emerald-400" />
+          </div>
+          <div
+            className={`text-2xl font-bold font-mono mt-2 ${
+              report.netProfitBaht >= 0 ? 'text-emerald-400' : 'text-rose-400'
+            }`}
+          >
+            {report.netProfitBaht >= 0 ? '+' : ''}
+            {report.netProfitBaht.toLocaleString()} บ.
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            ROI: {report.roiPercent >= 0 ? '+' : ''}{report.roiPercent}% · ทุนรวม {report.totalStakedBaht.toLocaleString()} บ.
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-4">
+          <div className="text-xs text-slate-400 flex items-center justify-between">
+            <span>Win Rate เข้าเป้า / เกาะกลุ่ม</span>
+            <CheckCircle2 className="w-4 h-4 text-amber-400" />
+          </div>
+          <div className="text-2xl font-bold font-mono text-white mt-2">
+            {report.winRatePercent}%{' '}
+            <span className="text-sm font-normal text-amber-300">
+              / {report.nearMissOrWinRatePercent}%
+            </span>
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            เข้าเต็ม {report.totalWinningDraws} งวด · Near-Miss {report.nearMissDraws} งวด
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-4">
+          <div className="text-xs text-slate-400 flex items-center justify-between">
+            <span>Max Drawdown สูงสุด</span>
+            <ShieldAlert className="w-4 h-4 text-rose-400" />
+          </div>
+          <div className="text-2xl font-bold font-mono text-rose-300 mt-2">
+            -{report.maxDrawdownBaht.toLocaleString()} บ.
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            หลุดติดกันสูงสุด {report.maxConsecutiveLosses} งวด (เฉลี่ย {report.naturalLosingStreakAvg} งวด)
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-4">
+          <div className="text-xs text-slate-400 flex items-center justify-between">
+            <span>Consistency Score</span>
+            <Activity className="w-4 h-4 text-sky-400" />
+          </div>
+          <div className="text-2xl font-bold font-mono text-sky-300 mt-2">
+            {report.consistencyScore} <span className="text-sm text-slate-500">/ 100</span>
+          </div>
+          <div className="text-xs text-slate-500 mt-1">
+            ความสม่ำเสมอของสูตรข้ามสัปดาห์
+          </div>
+        </div>
+
+        <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-4 col-span-2 lg:col-span-1">
+          <div className="text-xs text-slate-400 flex items-center justify-between">
+            <span>{meta.strategyMode === 'win4_3d' ? 'สถิติวิน 4 ตัว / 3D / 2D' : 'สถิติแตกย่อย 4D/3D/2D'}</span>
+            <BarChart3 className="w-4 h-4 text-emerald-400" />
+          </div>
+          <div className="text-sm font-mono text-slate-200 mt-2 space-y-1">
+            {meta.strategyMode === 'win4_3d' ? (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-slate-400 font-sans">แตก 3 ตัวตรง/โต๊ด:</span>
+                  <span className="font-bold text-amber-300">{report.win3BackCount} งวด</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400 font-sans">วิน 2 ตัว 12 หาง:</span>
+                  <span className="font-bold text-emerald-300">{report.win2BackCount} งวด</span>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex justify-between">
+                  <span className="text-slate-400 font-sans">4 ตัวตรง / โต๊ด:</span>
+                  <span className="font-bold text-amber-300">{report.win4StraightCount} / {report.win4ToadCount}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400 font-sans">3 ตัวท้าย / 2 ตัวท้าย:</span>
+                  <span className="font-bold text-emerald-300">{report.win3BackCount} / {report.win2BackCount}</span>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Equity Curve + Weekly Breakdown */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Equity Curve */}
+        <div className="lg:col-span-7 rounded-2xl bg-slate-900/70 border border-slate-800 p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-3">
+            <div>
+              <h3 className="text-base font-bold text-white">
+                กราฟเส้นสะสมกำไร (Equity Curve · {report.totalEvaluated} งวด)
+              </h3>
+              <p className="text-xs text-slate-400">
+                {meta.strategyMode === 'win4_3d'
+                  ? 'จำลอง 24 ชุด × 10 บ. + 4 ชุดเน้น × 50 บ. + 4 กันเบิ้ล × 10 บ. = 480 บ./งวด · โหมดระวังลดเหลือ 120 บ.'
+                  : 'รวมผลของการลดพอร์ตเหลือ 1 ชุด (120 บ.) อัตโนมัติในช่วง Near-Miss เพื่อประหยัดทุนช่วงผันผวน'}
+              </p>
+            </div>
+            <div className="text-xs font-mono tabular-nums text-slate-300">
+              จุดสูงสุด +{Math.max(0, ...report.equityCurve.map((p) => p.cumulativeProfit)).toLocaleString()} บ.
+            </div>
+          </div>
+
+          {chartSvg ? (
+            <div className="w-full overflow-x-auto">
+              <svg
+                viewBox={`0 0 ${chartSvg.width} ${chartSvg.height}`}
+                className="w-full h-56 min-w-[540px]"
+                role="img"
+                aria-label="กราฟเส้นกำไรสะสมย้อนหลัง"
+              >
+                <defs>
+                  <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={chartSvg.lastProfit >= 0 ? '#10b981' : '#f43f5e'} stopOpacity="0.28" />
+                    <stop offset="100%" stopColor={chartSvg.lastProfit >= 0 ? '#10b981' : '#f43f5e'} stopOpacity="0.01" />
+                  </linearGradient>
+                </defs>
+
+                {/* Zero Baseline */}
+                <line
+                  x1={chartSvg.padLeft}
+                  y1={chartSvg.zeroY}
+                  x2={chartSvg.width - chartSvg.padRight}
+                  y2={chartSvg.zeroY}
+                  stroke="#334155"
+                  strokeDasharray="4 4"
+                  strokeWidth="1"
+                />
+                <text
+                  x={chartSvg.padLeft - 8}
+                  y={chartSvg.zeroY + 4}
+                  textAnchor="end"
+                  fill="#64748b"
+                  fontSize="11"
+                  fontFamily="monospace"
+                >
+                  0
+                </text>
+                <text
+                  x={chartSvg.padLeft - 8}
+                  y="24"
+                  textAnchor="end"
+                  fill="#94a3b8"
+                  fontSize="11"
+                  fontFamily="monospace"
+                >
+                  {chartSvg.maxVal >= 1000 ? `${Math.round(chartSvg.maxVal / 1000)}k` : chartSvg.maxVal}
+                </text>
+                <text
+                  x={chartSvg.padLeft - 8}
+                  y={chartSvg.height - 32}
+                  textAnchor="end"
+                  fill="#94a3b8"
+                  fontSize="11"
+                  fontFamily="monospace"
+                >
+                  {chartSvg.minVal <= -1000 ? `${Math.round(chartSvg.minVal / 1000)}k` : chartSvg.minVal}
+                </text>
+
+                <polygon points={chartSvg.areaPoints} fill="url(#eqFill)" />
+                <polyline
+                  fill="none"
+                  stroke={chartSvg.lastProfit >= 0 ? '#34d399' : '#fb7185'}
+                  strokeWidth="2.5"
+                  strokeLinejoin="round"
+                  points={chartSvg.polylinePoints}
+                />
+              </svg>
+            </div>
+          ) : (
+            <div className="py-16 text-center text-xs text-slate-500">ไม่มีข้อมูลเพียงพอสำหรับวาดกราฟ</div>
+          )}
+        </div>
+
+        {/* Weekly Win Rate Breakdown */}
+        <div className="lg:col-span-5 rounded-2xl bg-slate-900/70 border border-slate-800 p-5 space-y-4">
+          <div className="border-b border-slate-800 pb-3">
+            <h3 className="text-base font-bold text-white">Win Rate แยกรายสัปดาห์</h3>
+            <p className="text-xs text-slate-400">
+              ติดตามเสถียรภาพรายสัปดาห์ (อัตราเข้าเต็ม vs เกาะกลุ่ม Near-Miss)
             </p>
           </div>
 
-          {/* Filters */}
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* Status Filter */}
-            <div className="inline-flex rounded-xl bg-slate-950 p-1 border border-slate-800 text-xs">
-              <button
-                onClick={() => setFilterMode('all')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                  filterMode === 'all' ? 'bg-amber-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-white'
-                }`}
+          <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1 tabular-nums">
+            {report.weeklyBreakdown.slice(0, 14).map((wk) => (
+              <div
+                key={wk.weekKey}
+                className="flex items-center justify-between gap-3 bg-slate-950/60 border border-slate-800/80 rounded-xl px-3.5 py-2.5 text-xs"
               >
-                ทั้งหมด ({accuracyReport.total})
-              </button>
-              <button
-                onClick={() => setFilterMode('dual')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                  filterMode === 'dual' ? 'bg-emerald-500 text-slate-950 font-bold' : 'text-slate-400 hover:text-emerald-300'
-                }`}
-              >
-                🔥 ทั้งบน-ล่าง ({accuracyReport.dualHits})
-              </button>
-              <button
-                onClick={() => setFilterMode('three')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                  filterMode === 'three' ? 'bg-purple-500 text-white font-bold' : 'text-slate-400 hover:text-purple-300'
-                }`}
-              >
-                👑 เข้า 3 ตัว ({accuracyReport.threeDigitHits})
-              </button>
-              <button
-                onClick={() => setFilterMode('hit')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                  filterMode === 'hit' ? 'bg-blue-600 text-white font-bold' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                เข้าเป้า ({accuracyReport.overallHits})
-              </button>
-              <button
-                onClick={() => setFilterMode('miss')}
-                className={`px-2.5 py-1 rounded-lg font-medium transition-colors ${
-                  filterMode === 'miss' ? 'bg-rose-500 text-white font-bold' : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                พลาด ({accuracyReport.total - accuracyReport.overallHits})
-              </button>
-            </div>
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-200">{wk.weekLabel}</div>
+                  <div className="text-[11px] text-slate-500">
+                    {wk.drawsCount} งวด · เข้า {wk.winCount} · เฉียด {wk.nearMissCount}
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <div className="text-right">
+                    <div className="font-mono font-bold text-amber-300">
+                      เข้า/เฉียด {wk.nearMissRatePercent}%
+                    </div>
+                    <div
+                      className={`font-mono text-[11px] ${
+                        wk.netProfitBaht >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                      }`}
+                    >
+                      {wk.netProfitBaht >= 0 ? '+' : ''}
+                      {wk.netProfitBaht.toLocaleString()} บ.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
-            {/* Year Filter */}
-            <select
-              value={yearFilter}
-              onChange={(e) => setYearFilter(e.target.value)}
-              className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
-            >
-              <option value="all">ทุกปี พ.ศ.</option>
-              <option value="2569">ปี 2569</option>
-              <option value="2568">ปี 2568</option>
-              <option value="2567">ปี 2567</option>
-              <option value="2566">ปี 2566</option>
-              <option value="2565">ปี 2565</option>
-            </select>
+      {/* 200-Draw Audit Inspector Table */}
+      <div className="rounded-2xl bg-slate-900/70 border border-slate-800 p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div>
+            <h3 className="text-base font-bold text-white">
+              ตารางตรวจสอบผลรายงวด (Audit Trail · {filteredRows.length} จาก {report.auditRows.length} งวด)
+            </h3>
+            <p className="text-xs text-slate-400">
+              แสดงชุด 4 ตัวที่ระบบเลือกให้ล่วงหน้า สถานะ Circuit Breaker และผลการตรวจสอบเทียบเลขออกจริง
+            </p>
+          </div>
 
-            {/* Search Input */}
+          <div className="flex flex-wrap items-center gap-2">
             <div className="relative">
               <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="ค้นหางวด / ตัวเลข..."
-                className="bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-amber-400"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="ค้นหาเลข 4 ตัว หรือวันที่..."
+                className="bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-400 font-mono"
               />
             </div>
+
+            {([
+              { id: 'all', label: 'ทั้งหมด' },
+              { id: 'win', label: 'เข้าเป้า' },
+              { id: 'nearmiss', label: 'Near-Miss' },
+              { id: 'defensive', label: 'ลดพอร์ต/พัก' },
+              { id: 'cold', label: 'หลุดขาด' }
+            ] as { id: AuditFilter; label: string }[]).map((btn) => (
+              <button
+                key={btn.id}
+                type="button"
+                onClick={() => setFilterMode(btn.id)}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                  filterMode === btn.id
+                    ? 'bg-amber-500 text-slate-950 font-semibold'
+                    : 'bg-slate-950 border border-slate-800 text-slate-300 hover:text-white'
+                }`}
+              >
+                {btn.label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Audit Rows */}
-        <div className="space-y-3">
-          {filteredResults.map((item) => (
-            <div
-              key={item.drawId}
-              className={`rounded-2xl border p-4 sm:p-5 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 transition-colors ${
-                item.isOverallHit
-                  ? 'bg-slate-950/70 border-slate-800/80 hover:border-emerald-500/30'
-                  : 'bg-rose-950/10 border-rose-500/20'
-              }`}
-            >
-              {/* Left Column: Draw Info & Actual Results */}
-              <div className="space-y-1.5 min-w-[240px]">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-white text-base">{item.drawDate}</span>
-                  <span className="text-xs text-slate-500">({item.dayOfWeek})</span>
-                </div>
-                <div className="text-xs text-slate-400 flex flex-wrap items-center gap-3">
-                  <span>
-                    รางวัลที่ 1: <strong className="text-white font-mono">{item.actualFirstPrize}</strong>
-                    <span className="text-slate-500 ml-1">(บน: <strong className="text-amber-300">{item.actualTop2}</strong>)</span>
-                  </span>
-                  <span>
-                    2 ตัวล่าง: <strong className="text-amber-300 font-mono text-sm">{item.actualLast2}</strong>
-                  </span>
-                </div>
-              </div>
+        <div className="overflow-x-auto max-h-[520px] overflow-y-auto">
+          <table className="w-full text-left border-collapse text-xs tabular-nums">
+            <thead className="sticky top-0 bg-slate-950 text-slate-400 border-b border-slate-800 z-10">
+              <tr>
+                <th className="py-3 px-3 font-medium">งวดวันที่</th>
+                <th className="py-3 px-3 font-medium">ผล 4D จริง</th>
+                <th className="py-3 px-3 font-medium">ชุดที่ AI คัดให้เล่น</th>
+                <th className="py-3 px-3 font-medium">สถานะพอร์ต</th>
+                <th className="py-3 px-3 font-medium">ผลการตรวจ</th>
+                <th className="py-3 px-3 font-medium text-right">สุทธิ</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/70">
+              {filteredRows.map((row) => {
+                const statusLabel =
+                  row.circuitBreakerStateAtDraw === 'red_pause'
+                    ? 'พักชั่วคราว (0 บ.)'
+                    : row.circuitBreakerStateAtDraw === 'yellow_nearmiss'
+                      ? 'ประคองพอร์ต 1 ชุด'
+                      : 'ปกติ 4 ชุด';
+                const statusColor =
+                  row.circuitBreakerStateAtDraw === 'red_pause'
+                    ? 'text-rose-400'
+                    : row.circuitBreakerStateAtDraw === 'yellow_nearmiss'
+                      ? 'text-amber-300'
+                      : 'text-emerald-400';
 
-              {/* Middle Column: Algorithmic Predictions with Match Highlighting */}
-              <div className="bg-slate-900/90 border border-slate-800/80 px-4 py-2.5 rounded-xl text-xs space-y-1.5 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-slate-400">เลขเด่นวิ่ง:</span>
-                  <div className="flex items-center gap-1">
-                    {item.predictedRunners.map((r, i) => {
-                      const isMatched = item.matchedRunners.includes(r);
-                      return (
-                        <span
-                          key={i}
-                          className={`px-2 py-0.5 rounded font-black text-xs ${
-                            isMatched
-                              ? 'bg-emerald-500 text-slate-950 shadow-sm shadow-emerald-500/30'
-                              : 'bg-slate-800 text-slate-400'
-                          }`}
-                        >
-                          {r} {isMatched && '✓'}
-                        </span>
-                      );
-                    })}
-                  </div>
-
-                  <span className="text-slate-500 ml-2">เจาะหลักร้อย:</span>
-                  <span className="text-amber-300 font-mono">[{item.predictedHundreds.join(', ')}]</span>
-                </div>
-
-                <div className="text-slate-400 flex flex-wrap items-center gap-2">
-                  <span>3 ตัวตรง VIP:</span>
-                  <span className="text-amber-200 font-mono font-semibold">
-                    {item.predictedThreeDigitsStraight.slice(0, 4).join(', ')}
-                  </span>
-                  {item.isThreeDigitsHit && (
-                    <span className="px-1.5 py-0.5 bg-yellow-400/20 text-yellow-300 border border-yellow-400/40 rounded text-[10px] font-bold">
-                      🎯 เข้า 3 ตัว
-                    </span>
-                  )}
-                </div>
-
-                <div className="text-slate-400 flex flex-wrap items-center gap-2">
-                  <span>แกนวิน 4 ตัว: <strong className="text-emerald-300 font-mono">[{item.win4Digits?.join(' - ')}]</strong></span>
-                  {item.isWin4Either2Hit && (
-                    <span className="px-1.5 py-0.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded text-[10px] font-bold">
-                      เข้าวิน 2 ตัว (12 หาง)
-                    </span>
-                  )}
-                  {item.isWin4ToadHit && (
-                    <span className="px-1.5 py-0.5 bg-amber-500/15 text-amber-300 border border-amber-500/30 rounded text-[10px] font-bold">
-                      เข้าวิน 3 โต๊ด
-                    </span>
-                  )}
-                </div>
-
-                <div className="text-slate-400 flex flex-wrap items-center gap-2">
-                  <span>2 ตัวบน: <strong className="text-slate-200 font-mono">{item.predictedPairsTop.slice(0, 3).join(', ')}</strong></span>
-                  <span className="text-slate-600">|</span>
-                  <span>2 ตัวล่าง: <strong className="text-sky-300 font-mono">{item.predictedPairsBottom.slice(0, 3).join(', ')}</strong></span>
-                </div>
-              </div>
-
-              {/* Right Column: Hit Badge & Explanation */}
-              <div className="lg:text-right min-w-[200px] shrink-0">
-                {item.isDualHit ? (
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-gradient-to-r from-amber-500/20 via-emerald-500/20 to-sky-500/20 text-amber-300 border border-amber-400/50 font-black text-xs shadow-md">
-                    <span>🔥 โดนทั้งบนและล่าง (2 เด้ง!)</span>
-                  </div>
-                ) : item.isOverallHit ? (
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-bold text-xs">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>{item.isThreeDigitsHit ? '👑 เข้า 3 ตัว' : item.isTopHit ? '⭐ เข้าชุดบน' : '⭐ เข้าชุดล่าง'}</span>
-                  </div>
-                ) : (
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/30 font-bold text-xs">
-                    <XCircle className="w-3.5 h-3.5" />
-                    <span>หลุดเป้าหมาย</span>
-                  </div>
-                )}
-                <p className="text-[11px] text-slate-400 mt-1">
-                  {item.details}
-                </p>
-              </div>
-            </div>
-          ))}
-
-          {filteredResults.length === 0 && (
-            <div className="text-center py-12 text-slate-500 text-sm">
-              ไม่พบข้อมูลงวดที่ตรงกับเงื่อนไขการค้นหา
-            </div>
-          )}
+                return (
+                  <tr key={row.drawId} className="hover:bg-slate-950/60 transition-colors">
+                    <td className="py-3 px-3 text-slate-300 whitespace-nowrap">
+                      <div className="font-medium text-white">{row.drawDate}</div>
+                      <div className="text-[11px] text-slate-500">{row.dayOfWeek}</div>
+                    </td>
+                    <td className="py-3 px-3">
+                      <span className="font-mono font-bold text-base text-amber-300 tracking-wider">
+                        {row.actual4D}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3">
+                      <div className="flex flex-wrap gap-1.5 font-mono">
+                        {row.sniperSets.map((setNum, idx) => {
+                          const played = row.setsPlayedCount > 0 && idx < row.setsPlayedCount;
+                          return (
+                            <span
+                              key={`${row.drawId}-${setNum}-${idx}`}
+                              className={`px-2 py-0.5 rounded border text-xs ${
+                                !played
+                                  ? 'bg-slate-950/40 border-slate-800/60 text-slate-500 line-through'
+                                  : setNum === row.actual4D
+                                    ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-bold'
+                                    : 'bg-slate-950 border-slate-700 text-slate-200'
+                              }`}
+                            >
+                              {setNum}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </td>
+                    <td className={`py-3 px-3 font-medium whitespace-nowrap ${statusColor}`}>
+                      {statusLabel}
+                    </td>
+                    <td className="py-3 px-3 text-slate-300 max-w-xs">
+                      <span
+                        className={
+                          row.isWin
+                            ? 'text-emerald-300 font-semibold'
+                            : row.isNearMiss
+                              ? 'text-amber-300 font-medium'
+                              : 'text-slate-400'
+                        }
+                      >
+                        {row.detailText}
+                      </span>
+                    </td>
+                    <td
+                      className={`py-3 px-3 text-right font-mono font-bold whitespace-nowrap ${
+                        row.netProfitBaht > 0
+                          ? 'text-emerald-400'
+                          : row.netProfitBaht < 0
+                            ? 'text-rose-400'
+                            : 'text-slate-500'
+                      }`}
+                    >
+                      {row.netProfitBaht > 0 ? '+' : ''}
+                      {row.netProfitBaht.toLocaleString()} บ.
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
